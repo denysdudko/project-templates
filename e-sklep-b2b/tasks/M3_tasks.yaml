@@ -1,0 +1,267 @@
+milestone: M3
+name: Подключение e-Sklep
+
+tasks:
+
+# ===================================================================
+# WBS-3.1 Подключение e-Sklep к ERP
+# ===================================================================
+
+- wbs: WBS-3.1
+
+  tasks:
+
+    - id: T-3.1.1
+      name: Создать новое стенд-подключение e-Sklep в конфигурации ERP Optima
+
+      description: >
+        В разделе System → Konfiguracja → Firma → Ogólne → e-Handel,
+        на вкладке "e-Sklep/e-Sale", нажать кнопку добавления нового
+        магазина, что откроет форму конфигурации с вкладками Ogólne,
+        Zasoby и Dodatkowe.
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.4.3
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Созданная (незаполненная) карточка стенда e-Sklep в ERP Optima
+
+      used_by:
+        - T-3.1.2
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что форма конфигурации нового магазина открылась и содержит три вкладки: Ogólne, Zasoby, Dodatkowe.
+
+    - id: T-3.1.2
+      name: Заполнить вкладку "Ogólne" данными, согласованными в M2
+
+      description: >
+        Внести на вкладке Ogólne значения "Nazwa sklepu", "Domyślna
+        waluta", "Dostępne waluty" (если требуется), "Cena domyślna",
+        "Cena poprzednia" (если используется), "Pomijaj towary z ceną
+        0,00" (если требуется), "Definicja RO", "Seria" и "Koszt
+        przesyłki" — согласно решениям задач T-2.2.1 и T-2.2.2.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.1.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Заполненная вкладка Ogólne формы Comarch e-Sklep
+
+      used_by:
+        - T-3.1.3
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что все значения на вкладке Ogólne соответствуют решениям, согласованным в T-2.2.1 и T-2.2.2.
+        - Проверить, что поле "Koszt przesyłki" заполнено — это обязательное поле.
+
+    - id: T-3.1.3
+      name: Сгенерировать ключ обмена (вкладка "Dodatkowe")
+
+      description: >
+        На вкладке Dodatkowe нажать значок "Generuj klucz wymiany" и
+        ввести название компании, название магазина и PIN, полученные
+        ранее (T-2.1.2), чтобы установить техническое подключение к
+        Comarch e-Sklep.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.1.2
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Сгенерированный и принятый ключ обмена
+
+      used_by:
+        - T-3.2.1
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что ключ обмена сгенерирован без ошибки авторизации.
+        - Проверить, что программа не выдала сообщение о неверных данных (название компании, магазина или PIN).
+
+# ===================================================================
+# WBS-3.2 Настройка параметров подключения
+# ===================================================================
+
+- wbs: WBS-3.2
+
+  tasks:
+
+    - id: T-3.2.1
+      name: Заполнить вкладку "Zasoby" данными, согласованными в M2
+
+      description: >
+        Внести на вкладке Zasoby значения "Grupa towarów", "Wyślij
+        zasoby", "Stany na dzień" и перечень "Magazyny" с указанием
+        магазина по умолчанию — согласно решениям задач T-2.3.1 и
+        T-2.3.2.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.1.3
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Заполненная вкладка Zasoby формы Comarch e-Sklep
+
+      used_by:
+        - T-3.2.2
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что группа товаров указана и соответствует согласованной в T-2.3.1.
+        - Проверить, что список складов соответствует согласованному в T-2.3.2 и что ровно один склад отмечен как склад по умолчанию.
+
+    - id: T-3.2.2
+      name: Заполнить вкладку "Dodatkowe" остальными параметрами подключения
+
+      description: >
+        Внести на вкладке Dodatkowe сопоставление способов оплаты
+        (Standardowe и, при необходимости, Online) — согласно T-2.4.1,
+        а также параметры "Mapuj kontrahentów", "Grupa kontrahenta" и
+        "Kontrola limitu płatności" — согласно T-2.4.2.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.2.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Заполненная вкладка Dodatkowe формы Comarch e-Sklep
+
+      used_by:
+        - T-3.2.3
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что сопоставление способов оплаты соответствует согласованному в T-2.4.1.
+        - Проверить, что параметры Mapuj kontrahentów, Grupa kontrahenta и Kontrola limitu płatności соответствуют согласованным в T-2.4.2.
+
+    - id: T-3.2.3
+      name: Сохранить конфигурацию подключения e-Sklep
+
+      description: >
+        Сохранить заполненную форму конфигурации Comarch e-Sklep
+        (вкладки Ogólne, Zasoby, Dodatkowe) в ERP Optima.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.2.2
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Сохраненная конфигурация подключения e-Sklep
+
+      used_by:
+        - T-3.3.1
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что форма сохранена без сообщений об ошибке.
+        - Проверить, что новый магазин отображается в списке e-Sklep/e-Sale со статусом "активен" (не отмечен как Nieaktywny).
+
+# ===================================================================
+# WBS-3.3 Проверка подключения
+# ===================================================================
+
+- wbs: WBS-3.3
+
+  tasks:
+
+    - id: T-3.3.1
+      name: Выполнить тестовую ручную синхронизацию
+
+      description: >
+        Запустить ручную синхронизацию (иконка e-Handel в меню Handel)
+        с параметрами по умолчанию ("Wyślij ofertę do e-Sklepu",
+        "Pobierz zamówienia z e-Sklepu"), чтобы проверить
+        работоспособность созданного подключения.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.2.3
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/wspolpraca-z-comarch-e-sklep/
+
+      result:
+        - Отчет о результатах тестовой синхронизации
+
+      used_by:
+        - T-3.3.2
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что синхронизация завершилась без сообщений об ошибке.
+        - Проверить, что программа не сообщила о конфликте одновременной синхронизации (ручной/автоматической).
+
+    - id: T-3.3.2
+      name: Подтвердить готовность подключения к базовой настройке магазина
+
+      description: >
+        Свести результаты тестовой синхронизации (T-3.3.1) и
+        сохраненной конфигурации (T-3.2.3) и зафиксировать, что
+        подключение ERP Optima ↔ Comarch e-Sklep установлено и
+        работоспособно.
+
+      performer: Консультант
+
+      depends_on:
+        - T-3.3.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Подтвержденное работоспособное подключение e-Sklep к ERP Optima
+
+      used_by:
+        - M4
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Проверить, что тестовая синхронизация выполнена успешно (T-3.3.1).
+        - Проверить, что валюта по умолчанию зафиксирована и соответствует согласованной в M2 (после первой синхронизации её нельзя изменить).
+        - Проверить, что статус магазина в списке e-Sklep/e-Sale — активен.
