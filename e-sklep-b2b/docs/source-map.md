@@ -38,10 +38,10 @@
 | WBS-6.3 | M6 — Настройка B2B и интеграций | Настройка условий сотрудничества | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/limit-kredytu-i-limit-przeterminowanych-platnosci/) | ✅ |
 | WBS-6.4 | M6 — Настройка B2B и интеграций | Настройка интеграций | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/kategoria/integracje/) | ✅ |
 | WBS-6.5 | M6 — Настройка B2B и интеграций | Проверка функций B2B и интеграций | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/kategoria/b2b/) | ✅ |
-| WBS-7.1 | M7 — Тестирование и приемка | Подготовка тестирования | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/jak-przebiega-proces-zamowienia/) | ✅ + ⚠️ Internal (частично) |
-| WBS-7.2 | M7 — Тестирование и приемка | Функциональное тестирование | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/jak-przebiega-proces-zamowienia/) | ✅ + ⚠️ Internal (частично) |
-| WBS-7.3 | M7 — Тестирование и приемка | Исправление выявленных замечаний | — | ⚠️ Internal (полностью) |
-| WBS-7.4 | M7 — Тестирование и приемка | Приемка проекта | — | ⚠️ Internal (полностью) |
+| WBS-7.1 | M7 — Презентация и приёмка проекта | Подготовка к презентации проекта | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/jak-przebiega-proces-zamowienia/) | ✅ + ⚠️ Internal (частично) |
+| WBS-7.2 | M7 — Презентация и приёмка проекта | Презентация решения заказчику | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/jak-przebiega-proces-zamowienia/) | ✅ + ⚠️ Internal (частично) |
+| WBS-7.3 | M7 — Презентация и приёмка проекта | Обработка замечаний, выявленных на презентации | — | ⚠️ Internal (полностью) |
+| WBS-7.4 | M7 — Презентация и приёмка проекта | Приемка проекта | — | ⚠️ Internal (полностью) |
 | WBS-8.1 | M8 — Обучение пользователей | Подготовка обучения | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/kategoria/jak-zaczac/) | ✅ + ⚠️ Internal (частично) |
 | WBS-8.2 | M8 — Обучение пользователей | Проведение обучения | — | ⚠️ Internal (полностью) |
 | WBS-8.3 | M8 — Обучение пользователей | Подтверждение готовности пользователей | — | ⚠️ Internal (полностью) |
