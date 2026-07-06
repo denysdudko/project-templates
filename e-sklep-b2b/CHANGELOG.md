@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5 — План разработки агента и справочник трудозатрат (Этап 3)
+- Добавлен `docs/agent-development-plan.md`: 8 этапов разработки
+  агента-планировщика со статусами (Этап 1 и Этап 2 — готово, Этап 3 — готово,
+  Этапы 4–8 — не начаты).
+- Добавлен `agent/effort-estimates.yaml` — справочник базовых оценок
+  трудозатрат по 10 типам задач (выведены из фактических Task в M1–M9:
+  interview, negotiation, configuration, content_data_preparation,
+  verification, synthesis_reporting, remediation, approval_signoff,
+  session_delivery, support_monitoring), с обоснованием оценок и правилом
+  подбора типа задачи по ключевым словам (явного поля `task_type` в схеме
+  Task пока нет — вынесено в `v2_proposals`).
+- `tasks/M*_tasks.yaml` и `schema/milestones_wbs.yaml` не менялись.
+
 ## v1.4 — Приведение M7 в схеме к фактическому содержанию задач
 - Подтверждено (владельцем шаблона): «Презентация и приёмка проекта» — правильное
   название M7, а не «Тестирование и приемка» из предыдущей версии схемы.
