@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Project Planner Agent — Input Schema",
+  "type": "object",
+  "required": ["project_name", "client", "erp", "users_count", "start_date", "target_launch_date"],
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "Название проекта, например: 'Внедрение Comarch e-Sklep B2B для клиента ABC'"
+    },
+    "client": {
+      "type": "string",
+      "description": "Наименование заказчика"
+    },
+    "erp": {
+      "type": "object",
+      "required": ["system"],
+      "properties": {
+        "system": {
+          "type": "string",
+          "enum": ["Comarch ERP Optima"],
+          "description": "На v1 шаблон покрывает только Optima. Другие ERP — вне текущей архитектуры."
+        },
+        "version": {
+          "type": "string",
+          "description": "Опционально: версия ERP, если известна на старте"
+        }
+      }
+    },
+    "users_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Количество пользователей системы — влияет на объём обучения (M8) и оценку трудозатрат"
+    },
+    "integrations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Список интеграций (например: Baselinker, DHL, PayU). Каждая — отдельный client-specific stub поверх WBS-6.4, не расширяет базовый шаблон."
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "individual_prices",
+          "credit_limits",
+          "multiple_warehouses"
+        ]
+      },
+      "default": [],
+      "description": "Особенности проекта. Значения ограничены перечнем, покрытым шаблоном (WBS-6.2, WBS-6.3, M2/Zasoby). Значение вне enum — сигнал, что фича не покрыта шаблоном и требует решения до генерации плана, а не молчаливой генерации с нуля."
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Дата начала проекта, формат YYYY-MM-DD"
+    },
+    "target_launch_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Желаемая дата запуска, формат YYYY-MM-DD"
+    }
+  }
+}
