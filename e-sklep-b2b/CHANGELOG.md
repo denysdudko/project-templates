@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.6 — Реестр рисков (Этап 4)
+- Добавлен `agent/risk-register.yaml` — 7 рисков, выведенных из фактических
+  ограничений и зависимостей в M1–M9 и `selection-rules.md`, каждый с
+  проверяемым `condition` на полях `agent/input-schema.json` (`erp.version`,
+  `integrations`, `features`, `users_count`, `start_date`/`target_launch_date`)
+  и `related_wbs`. Риски без проверяемого condition (например, объём каталога
+  товаров — поле для этого в input-schema.json пока нет) не включены,
+  добавление такого поля вынесено в `v2_proposals`.
+- `docs/agent-development-plan.md`: статус Этапа 4 обновлён на «готово».
+- `tasks/M*_tasks.yaml` и `schema/milestones_wbs.yaml` не менялись.
+
 ## v1.5 — План разработки агента и справочник трудозатрат (Этап 3)
 - Добавлен `docs/agent-development-plan.md`: 8 этапов разработки
   агента-планировщика со статусами (Этап 1 и Этап 2 — готово, Этап 3 — готово,
