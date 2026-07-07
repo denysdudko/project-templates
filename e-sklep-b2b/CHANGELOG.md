@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8 — R-7 привязан к результату Sprint-плана; порядок сборки Этапа 6
+- `agent/risk-register.yaml`, R-7: условие заменено с эвристики "разрыв start_date/target_launch_date < 8 недель" на прямую ссылку на флаг "не укладывается в срок" из `agent/sprint-mapping-rules.md` (`total_sprints_used > available_sprints`, шаг 5 алгоритма); в `v2_proposals` убран пункт про эту замену — она выполнена.
+- `docs/agent-development-plan.md`, Этап 6: порядок сборки исправлен — Sprint-план (Этап 5) теперь идёт перед Рисками (Этап 4), а не после Deliverables, т.к. R-7 зависит от готового Sprint-плана.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.7 — Правило Milestone → Sprint (Этап 5)
 - Добавлен `agent/sprint-mapping-rules.md` — единый граф зависимостей по `depends_on` через все M1–M9 (включая межмилестоновые связи), топологический порядок с тай-брейком по шаблону, жадное распределение по спринтам с трудоёмкостью из `agent/effort-estimates.yaml`.
 - Контракт с `effort-estimates.yaml`: правило классифицирует Task по типу (эвристика Этапа 3) и берёт среднюю точку диапазона `base_estimate_hours`; для `remediation` (диапазон не задан в справочнике) введена отдельная константа-резерв `remediation_buffer_hours`; для `support_monitoring` (T-9.3.2, недельная нагрузка, а не оценка на Task) — отдельная обработка как нагрузки периода гиперподдержки после запуска.
