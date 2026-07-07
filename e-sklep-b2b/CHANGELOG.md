@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.11 — Валидатор плана (Этап 7)
+- Добавлен `agent/validate_plan.py` — линтер над выходом `assemble_plan.py`: `integrity` (ID в `depends_on`/`used_by` существуют), `source_url` (домен/раздел документации Comarch), `source` (нет Task без source, кроме `Internal Project Methodology`), `checklist_shape` (`interview_checklist`/`verification_checklist` — строго `list[str]`), `cross_section` (Task ⇔ `dependencies`/`effort_estimates`/`sprint_plan.task_sprint` без расхождений). Отчёт, не гейт — не блокирует вывод плана.
+- `--selftest`: намеренная поломка каждой из 5 проверок на копии реального плана + regression на `agent/examples/client-abc.plan.json` (ожидается ровно 16 находок — уже задокументированная `open-issues.md` п.1 проблема, не новая).
+- Найден и исправлен в `agent/assemble_plan.py` (`patch_stale_slot_dependencies`, не в шаблоне): `T-6.4.1.used_by` — та же проблема "ссылка на слот T-6.4.2", что раньше исправили только для `T-6.5.1.depends_on`. `open-issues.md` п.4 обновлён.
+- `agent/examples/client-abc.plan.json` перегенерирован; добавлен `agent/examples/client-abc.validation-report.txt`.
+- `docs/agent-development-plan.md`: статус Этапа 7 обновлён на «готово».
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.10 — Исправлены непреднамеренные YAML-словари в чек-листах M2/M3/M5/M6/M7/M8
 - Найдено при разборе `agent/examples/client-abc.plan.json`: 4 пункта `verification_checklist` в deliverables оказались вложенными словарями, а не строками. Причина — незакавыченный текст пункта чек-листа вида "Проверить, что X: Y, Z." парсится YAML как мэппинг `{"Проверить, что X": "Y, Z."}` из-за `": "` внутри строки.
 - Сплошная проверка по всем `tasks/M1..M9_tasks.yaml` нашла ещё 5 таких же случаев в `interview_checklist`, не проявившихся в deliverables (deliverables агрегирует только `verification_checklist`).
