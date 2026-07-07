@@ -123,7 +123,7 @@ def check_integrity(plan: dict, report: Report) -> None:
             for ref in t.get(field_name) or []:
                 if ref in valid_targets:
                     continue
-                hint = " (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)" if ref in milestone_ids else ""
+                hint = " (это Milestone ID, а не Task/WBS ID)" if ref in milestone_ids else ""
                 report.add(
                     "integrity",
                     f"{t['id']}.{field_name} ссылается на несуществующий ID {ref!r}{hint}",
@@ -316,36 +316,17 @@ def run_selftest() -> None:
     report = validate_plan(plan)
     print(f"[selftest] regression на agent/examples/client-abc.plan.json: {len(report.findings)} находок(и)")
 
-    # Ожидаемая "чистая" регрессия -- НЕ ноль находок: остаётся ровно
-    # уже задокументированная (open-issues.md, п.1) проблема "used_by
-    # указывает на Milestone ID вместо Task ID" -- 16 случаев в этом
-    # шаблоне. Валидатор обязан её видеть (это его работа), просто это не
-    # НОВАЯ проблема. Проверки 2-5 (source_url/source/checklist_shape/
-    # cross_section) на реальном плане должны быть чистыми -- это и есть
-    # "после исправления багов линтер не находит новых нарушений".
-    unexpected = [
-        f
-        for f in report.findings
-        if not (f.check == "integrity" and "Milestone ID" in f.message)
-    ]
-    if unexpected:
-        print(format_report(report, plan))
-        print(f"[selftest] ОШИБКА: {len(unexpected)} находок(и) вне известного open-issues.md п.1")
-        sys.exit(1)
-
-    known_issue_1_count = sum(1 for f in report.findings if f.check == "integrity" and "Milestone ID" in f.message)
-    if known_issue_1_count != 16:
+    # Известная проблема "used_by указывает на Milestone ID вместо Task/WBS
+    # ID" (была open-issues.md п.1) закрыта точечной правкой tasks/M*_tasks.yaml
+    # -- реальный план теперь обязан быть полностью чист по всем 5 проверкам.
+    if report.findings:
         print(format_report(report, plan))
         print(
-            f"[selftest] ОШИБКА: ожидалось 16 находок по известному open-issues.md п.1, "
-            f"получено {known_issue_1_count} -- либо появилась новая проблема, либо п.1 "
-            f"частично исправлен и это число нужно осознанно обновить здесь"
+            f"[selftest] ОШИБКА: {len(report.findings)} находок(и) на реальном плане -- "
+            f"регрессия должна быть чистой (0)"
         )
         sys.exit(1)
-    print(
-        f"[selftest] regression -- OK: {known_issue_1_count} находок(и), все -- "
-        f"уже задокументированный open-issues.md п.1, новых нарушений нет"
-    )
+    print("[selftest] regression -- OK: 0 находок")
 
     # --- integrity: сломать depends_on ---
     broken = json.loads(json.dumps(plan))
@@ -354,7 +335,7 @@ def run_selftest() -> None:
     assert any(f.check == "integrity" for f in r.findings), "integrity не поймал несуществующий depends_on"
     print("[selftest] integrity: несуществующий ID в depends_on -- поймано OK")
 
-    # --- integrity: used_by указывает на Milestone ID (см. open-issues.md п.1) ---
+    # --- integrity: used_by указывает на Milestone ID ---
     broken = json.loads(json.dumps(plan))
     broken["milestones"][0]["wbs"][0]["tasks"][0]["used_by"] = ["M9"]
     r = validate_plan(broken)

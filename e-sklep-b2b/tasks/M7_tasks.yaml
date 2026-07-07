@@ -261,7 +261,7 @@ tasks:
         - Подписанный акт приемки проекта
 
       used_by:
-        - M8
+        - T-8.1.1
 
       interview_checklist: []
 

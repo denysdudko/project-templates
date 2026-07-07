@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.12 — Закрыт open-issues.md п.1: used_by на Milestone ID → конкретный Task ID
+- Все 16 случаев `used_by`, указывавшего на Milestone ID вместо Task/WBS ID (`tasks/M1..M9_tasks.yaml`), заменены на конкретного потребителя. Правило 7 (docs/principles.md): потребитель — конкретная Task, не milestone.
+- Потребитель определялся по факту, не механической заменой: где есть прямой `depends_on` следующей задачи на исходную (T-2.4.3→T-3.1.1) или явная текстовая ссылка в `description` (T-2.2.2→T-3.1.2, T-2.3.2→T-3.2.1, T-4.1.3→T-9.1.1 через чек-лист "Lista czynności na start", T-4.2.2/T-4.4.2/T-4.5.3/T-6.5.1→T-7.1.1 через явный агрегатор "Свести результаты выполнения M2–M6") — эти решения подтверждены содержимым задач. Где ни то ни другое не нашлось (T-1.5.2→M2/M4/M5/M6, T-3.3.2→M4, T-5.6.1→M6, T-7.4.2→M8, T-8.3.1→M9), потребителем назначена первая Task целевого milestone/WBS без собственного `depends_on` (структурная точка входа) — за неимением более точного факта, не выдумано.
+- WBS-уровневые `used_by` (например T-6.1.4 → WBS-6.5) не трогались — это не тот класс ошибки, они уже были валидны.
+- `agent/validate_plan.py`: `--selftest` больше не ожидает 16 известных находок — теперь чистая регрессия (0 находок) на `agent/examples/client-abc.plan.json`. Подсказки в отчёте про "Milestone ID" избавлены от ссылки на закрытый пункт open-issues.md.
+- `open-issues.md`: п.1 удалён (закрыт), остальные пункты перенумерованы (2→1, 3→2, 4→3); `agent/sprint-mapping-rules.md` и `agent/assemble_plan.py` — убраны комментарии-ссылки на закрытый пункт.
+- `docs/agent-development-plan.md`: описание Этапа 7 обновлено — регрессия на реальном плане теперь 0 находок, а не 16; добавлена запись о закрытии.
+- `agent/examples/client-abc.plan.json` и `agent/examples/client-abc.validation-report.txt` перегенерированы.
+- `schema/milestones_wbs.yaml` не менялся; правки `tasks/M*_tasks.yaml` — только значения `used_by` (содержимое Task, не архитектура/структура YAML).
+
 ## v1.11 — Валидатор плана (Этап 7)
 - Добавлен `agent/validate_plan.py` — линтер над выходом `assemble_plan.py`: `integrity` (ID в `depends_on`/`used_by` существуют), `source_url` (домен/раздел документации Comarch), `source` (нет Task без source, кроме `Internal Project Methodology`), `checklist_shape` (`interview_checklist`/`verification_checklist` — строго `list[str]`), `cross_section` (Task ⇔ `dependencies`/`effort_estimates`/`sprint_plan.task_sprint` без расхождений). Отчёт, не гейт — не блокирует вывод плана.
 - `--selftest`: намеренная поломка каждой из 5 проверок на копии реального плана + regression на `agent/examples/client-abc.plan.json` (ожидается ровно 16 находок — уже задокументированная `open-issues.md` п.1 проблема, не новая).

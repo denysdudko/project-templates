@@ -319,7 +319,7 @@ def patch_stale_slot_dependencies(milestones: list[dict]) -> None:
 
 # ---------------------------------------------------------------------------
 # Dependencies -- из шаблона, без изменений (used_by не используется как
-# источник порядка, см. sprint-mapping-rules.md и open-issues.md п.1)
+# источник порядка, см. sprint-mapping-rules.md)
 # ---------------------------------------------------------------------------
 
 

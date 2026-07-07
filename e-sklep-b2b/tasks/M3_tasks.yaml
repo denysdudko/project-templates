@@ -257,7 +257,7 @@ tasks:
         - Подтвержденное работоспособное подключение e-Sklep к ERP Optima
 
       used_by:
-        - M4
+        - T-4.1.1
 
       interview_checklist: []
 
