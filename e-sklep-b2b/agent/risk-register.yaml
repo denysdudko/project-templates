@@ -1,0 +1,138 @@
+reference:
+  id: risk-register
+  name: Реестр рисков внедрения Comarch e-Sklep B2B
+  version: "1.0"
+  scope: >
+    Статичный справочник "риск → условие появления". Агент выбирает
+    применимые риски, сравнивая condition с фактическими значениями
+    agent/input-schema.json конкретного проекта — не формулирует риски
+    заново для каждого проекта. Риск без проверяемого condition в
+    реестр не включается (иначе агент не сможет отобрать его
+    автоматически).
+  not_in_scope: >
+    Вероятность и критичность риска здесь не оцениваются — только факт
+    условия появления. Это может быть добавлено отдельно как v2, если
+    понадобится.
+
+condition_language: >
+  condition — выражение на полях agent/input-schema.json (erp.version,
+  integrations, features, users_count, start_date, target_launch_date).
+  Синтаксис читается человеком и разбирается простым правиловым
+  механизмом агента, это не код на конкретном языке программирования.
+
+risks:
+
+  - id: R-1
+    risk: >
+      Версия ERP Optima заказчика не указана на старте (erp.version
+      опционален в input-schema.json) — нельзя заранее подтвердить
+      соответствие техническим требованиям e-Handel (NET Framework 4.5,
+      WSE 3.0 Runtime, SQLXML 4.0, лицензионные модули Kasa/Bank и
+      Handel) до начала работ WBS-2.1.
+    condition: erp.version отсутствует (не указано во входных данных)
+    related_wbs: [WBS-2.1]
+    source:
+      type: Internal Project Methodology
+      note: >
+        Сами технические требования документированы (source.url задачи
+        T-2.1.1); риск — в том, что готовность к их проверке не
+        подтверждена на этапе планирования, а не в содержании самого
+        требования.
+
+  - id: R-2
+    risk: >
+      Заказанная интеграция из integrations может не иметь отдельной
+      статьи в разделе документации Comarch /kategoria/integracje/ — по
+      правилу selection-rules.md для WBS-6.4 такую интеграцию нельзя
+      развернуть как child-задачу T-6.4.2.x с валидным source.url без
+      отдельной проверки.
+    condition: "len(integrations) > 0"
+    related_wbs: [WBS-6.4]
+    source:
+      type: Internal Project Methodology
+      note: >
+        Категория документации https://pomoc.comarchesklep.pl/kategoria/integracje/
+        существует, но полное покрытие каждого конкретного названия
+        интеграции не гарантировано — это наблюдение процесса отбора
+        шаблона (Этап 2), а не факт из самой документации.
+
+  - id: R-3
+    risk: >
+      Кредитный лимит и лимит просроченных платежей (WBS-6.3)
+      устанавливаются только на карточке контрагента со статусом
+      "podmiot gospodarczy" — если среди контрагентов заказчика есть
+      физические лица без этого статуса, для них лимит через
+      предусмотренный механизм не настраивается.
+    condition: "'credit_limits' in features"
+    related_wbs: [WBS-6.3]
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/artykul/limit-kredytu-i-limit-przeterminowanych-platnosci/
+
+  - id: R-4
+    risk: >
+      Форма подключения e-Sklep требует ровно один склад по умолчанию
+      (T-2.3.2) даже при нескольких активных складах-источниках остатков
+      — при multiple_warehouses заказчику нужно заранее определить
+      единственный склад для резервирований, что не всегда очевидно при
+      распределенной логистике.
+    condition: "'multiple_warehouses' in features"
+    related_wbs: [WBS-2.3]
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+  - id: R-5
+    risk: >
+      Индивидуальные цены контрагента (individual_prices, WBS-6.2)
+      отображаются только после входа в личный кабинет (Strefa klienta)
+      — если согласованная в WBS-6.1 видимость цен допускает показ цен
+      незарегистрированным пользователям, ожидаемый эффект
+      индивидуальных цен для гостевого просмотра не будет достигнут.
+    condition: "'individual_prices' in features"
+    related_wbs: [WBS-6.1, WBS-6.2]
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/artykul/jak-skonfigurowac-sklep-pod-obsluge-b2b/
+
+  - id: R-6
+    risk: >
+      Большое количество пользователей увеличивает число групп/сессий
+      обучения (M8) и риск, что не все участники получат согласованный
+      объём обучения (T-8.1.1) в рамках стандартного формата одной-двух
+      сессий.
+    condition: "users_count > 20"
+    related_wbs: [WBS-8.1]
+    source:
+      type: Internal Project Methodology
+      note: >
+        Порог 20 — эвристика консультантов, не норматив; сама связь
+        users_count с объёмом обучения M8 зафиксирована в описании поля
+        users_count в agent/input-schema.json.
+
+  - id: R-7
+    risk: >
+      Срок между start_date и target_launch_date заметно короче базовой
+      длительности проекта (project.default_duration_weeks: 12 в
+      schema/milestones_wbs.yaml) — объём работ M1–M9 может не
+      укладываться в срок без сокращения содержания или параллелизации
+      этапов.
+    condition: "(target_launch_date - start_date) < 8 недель"
+    related_wbs: [WBS-1.5]
+    source:
+      type: Internal Project Methodology
+      note: >
+        Порог 8 недель — эвристика консультантов (около 2/3 от базовых
+        12 недель шаблона), а не факт из документации Comarch. Точный
+        порог предполагается уточнить на Этапе 5 (Milestone → Sprint) на
+        основе сумм оценок из agent/effort-estimates.yaml.
+
+v2_proposals:
+  - Добавить в agent/input-schema.json поле объёма каталога (например
+    catalog_size_estimate), чтобы риски по объёму товарных данных (фото,
+    описания, атрибуты — WBS-5.1–5.4) можно было включить в реестр с
+    проверяемым condition. Без такого поля подобные риски condition не
+    имеют и в этот реестр не включены.
+  - На Этапе 5 заменить эвристический порог R-7 (8 недель) расчётом от
+    суммы базовых оценок agent/effort-estimates.yaml для выбранного
+    состава WBS/Task.
