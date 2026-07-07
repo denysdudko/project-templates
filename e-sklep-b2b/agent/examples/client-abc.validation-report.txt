@@ -1,21 +1,4 @@
 Проверено Task: 88
-Находок: 16 (errors: 16, warnings: 0)
+Находок: 0 (errors: 0, warnings: 0)
 
-[integrity] 16 находок(и):
-  - (error) T-1.5.2.used_by ссылается на несуществующий ID 'M2' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-1.5.2.used_by ссылается на несуществующий ID 'M4' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-1.5.2.used_by ссылается на несуществующий ID 'M5' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-1.5.2.used_by ссылается на несуществующий ID 'M6' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-2.2.2.used_by ссылается на несуществующий ID 'M3' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-2.3.2.used_by ссылается на несуществующий ID 'M3' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-2.4.3.used_by ссылается на несуществующий ID 'M3' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-3.3.2.used_by ссылается на несуществующий ID 'M4' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-4.1.3.used_by ссылается на несуществующий ID 'M9' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-4.2.2.used_by ссылается на несуществующий ID 'M7' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-4.4.2.used_by ссылается на несуществующий ID 'M7' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-4.5.3.used_by ссылается на несуществующий ID 'M7' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-5.6.1.used_by ссылается на несуществующий ID 'M6' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-6.5.1.used_by ссылается на несуществующий ID 'M7' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-7.4.2.used_by ссылается на несуществующий ID 'M8' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-  - (error) T-8.3.1.used_by ссылается на несуществующий ID 'M9' (это Milestone ID, не Task/WBS -- см. open-issues.md п.1)
-
+Нарушений не найдено.

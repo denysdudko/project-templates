@@ -317,7 +317,7 @@ tasks:
         - Подтвержденная корректность опубликованных данных в e-Sklep
 
       used_by:
-        - M6
+        - T-6.1.1
 
       interview_checklist: []
 
