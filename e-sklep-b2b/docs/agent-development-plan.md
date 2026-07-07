@@ -71,18 +71,45 @@ child-экземпляр слота T-6.4.2, а не новая WBS). Остал
 спринтов в шаблон не переносятся.
 
 ## Этап 6 — Сборка выходного пакета
-**Статус: не начато.**
+**Статус: готово.** Артефакт: `agent/assemble_plan.py` (+ `agent/examples/`).
 
-Порядок генерации итогового плана: Charter → Milestones → WBS → Tasks (из
-шаблона + отбор Этапа 2) → Dependencies (`depends_on`/`used_by` из шаблона) →
-Оценки трудозатрат (Этап 3) → Sprint-план (Этап 5) → Риски (Этап 4) →
-Deliverables/критерии завершения этапов (уже есть как `verification_checklist`
-на уровне Task). Sprint-план идёт раньше рисков не случайно: риск R-7
-(`agent/risk-register.yaml`) отбирается по флагу "не укладывается в срок" из
-`agent/sprint-mapping-rules.md`, и без готового Sprint-плана этот флаг ещё не
-существует. LLM отвечает только за адаптацию формулировок под клиента
-(см. `docs/principles.md`, п. 3 иерархии источников истины), не за структуру
-плана.
+Исполняемый Python-пайплайн (не только описание правилом, как на Этапах
+2/5): Charter → Milestones → WBS → Tasks (из шаблона + вариативность
+WBS-6.4 по `docs/selection-rules.md`) → Dependencies (`depends_on` из
+шаблона, без изменений) → Оценки трудозатрат (`agent/effort-estimates.yaml`,
+Этап 3) → Sprint-план (`agent/sprint-mapping-rules.md`, Этап 5) → Риски
+(`agent/risk-register.yaml`, Этап 4, включая R-7 по факту готового
+Sprint-плана) → Deliverables (агрегация `verification_checklist`, без
+новых формулировок). Sprint-план идёт раньше рисков не случайно: R-7
+отбирается по флагу "не укладывается в срок" из Sprint-плана, и без него
+этот флаг не существует.
+
+LLM подключается только последним шагом (`adapt_wording_with_llm`) и
+только как контракт: разрешено переписывать исключительно текстовые поля
+(Charter.description/objective, Task.description,
+interview_checklist/verification_checklist); попытка изменить
+id/depends_on/used_by/состав Milestone/WBS/Task отклоняется явной
+ошибкой (структурный fingerprint до/после сверяется программно), а не
+проверяется на словах. Без подключённого LLM-клиента шаг — no-op
+passthrough (в репозитории нет живого LLM API).
+
+`--selftest` прогоняет классификацию всех реальных Task шаблона по
+`effort-estimates.yaml`, сверяет её с `examples` из самого справочника,
+проверяет обе ветки WBS-6.4 (пустой/непустой список интеграций, включая
+интеграцию вне `KNOWN_INTEGRATION_DOCS`), ветку "не укладывается в срок"
+(R-7) и отказ LLM-контракта при попытке сломать структуру. Пример
+прогона на `agent/examples/client-abc.input.json` (тот же условный
+клиент "ABC", что фигурировал как пример в `agent/input-schema.json`)
+сохранён в `agent/examples/client-abc.plan.json`.
+
+Известное ограничение, найденное при реализации (не исправлялось в этом
+проходе — см. `open-issues.md`): у 7 Task keyword-эвристика
+`effort-estimates.yaml` не даёт совпадения (глагол не входит в keywords
+или не в начале названия) — в `assemble_plan.py` заведён
+`MANUAL_TASK_TYPE_OVERRIDES` с обоснованием для каждой, `effort-estimates.yaml`
+не менялся.
+
+Этап 8 (Jira-экспорт) в этот пайплайн не входит.
 
 ## Этап 7 — Валидатор перед выдачей
 **Статус: не начато.**
