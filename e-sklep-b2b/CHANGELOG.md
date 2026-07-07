@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.10 — Исправлены непреднамеренные YAML-словари в чек-листах M2/M3/M5/M6/M7/M8
+- Найдено при разборе `agent/examples/client-abc.plan.json`: 4 пункта `verification_checklist` в deliverables оказались вложенными словарями, а не строками. Причина — незакавыченный текст пункта чек-листа вида "Проверить, что X: Y, Z." парсится YAML как мэппинг `{"Проверить, что X": "Y, Z."}` из-за `": "` внутри строки.
+- Сплошная проверка по всем `tasks/M1..M9_tasks.yaml` нашла ещё 5 таких же случаев в `interview_checklist`, не проявившихся в deliverables (deliverables агрегирует только `verification_checklist`).
+- Исправлено во всех 9 случаях (`tasks/M2_tasks.yaml`: T-2.1.2, T-2.4.2; `tasks/M3_tasks.yaml`: T-3.1.1; `tasks/M5_tasks.yaml`: T-5.1.1; `tasks/M6_tasks.yaml`: T-6.3.1; `tasks/M7_tasks.yaml`: T-7.2.1, T-7.3.2; `tasks/M8_tasks.yaml`: T-8.1.1, T-8.1.2) — соответствующая строка обёрнута в кавычки, текст пункта не менялся ни на символ.
+- Пример плана (`agent/examples/client-abc.plan.json`) перегенерирован — все элементы deliverables теперь строки.
+- Это единственные затронутые файлы `tasks/M*_tasks.yaml` в этом проходе — правка синтаксическая (кавычки), не меняет содержание или структуру Task/WBS/Milestone.
+
 ## v1.9 — Сборка выходного пакета (Этап 6)
 - Добавлен `agent/assemble_plan.py` — исполняемый Python-пайплайн (не описание, а код): Charter → Milestones → WBS → Tasks (+ вариативность WBS-6.4) → Dependencies → Оценки (`effort-estimates.yaml`) → Sprint-план (`sprint-mapping-rules.md`) → Риски (`risk-register.yaml`, включая R-7 по факту Sprint-плана) → Deliverables (агрегация `verification_checklist`).
 - LLM подключается только последним шагом как enforced-контракт (`adapt_wording_with_llm`): разрешено менять только текстовые поля, попытка изменить структуру (id/depends_on/used_by/состав) отклоняется программно, а не только по описанию.
