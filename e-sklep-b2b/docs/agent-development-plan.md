@@ -112,14 +112,33 @@ passthrough (в репозитории нет живого LLM API).
 Этап 8 (Jira-экспорт) в этот пайплайн не входит.
 
 ## Этап 7 — Валидатор перед выдачей
-**Статус: не начато.**
+**Статус: готово.** Артефакт: `agent/validate_plan.py`.
 
-Линтер, который проверяет сгенерированный план перед показом человеку:
-все ID из `depends_on`/`used_by` существуют в плане; каждый `source.url`
-принадлежит одному из разрешённых доменов/разделов документации Comarch
-(pomoc.comarchesklep.pl, pomoc.comarch.pl/optima и согласованные в
-`docs/principles.md` разделы); ни одна задача не создана без ссылки на
-документацию, кроме помеченных `Internal Project Methodology`.
+Линтер над выходом `assemble_plan.py` (Этап 6) — отчёт для консультанта/PM
+перед экспортом в Jira (Этап 8), не гейт: ничего не блокирует и не
+переписывает, только явно перечисляет находки. Пять проверок: (1)
+`integrity` — все ID из `depends_on`/`used_by` существуют среди реальных
+Task/WBS ID плана; (2) `source_url` — каждый `source.url` принадлежит
+домену/разделу официальной документации Comarch (по домену + форме пути,
+т.к. реальные статьи — конкретные страницы, а не сами 4 URL из
+`docs/principles.md`); (3) `source` — ни одна Task не без `source`, кроме
+`Internal Project Methodology`; (4) `checklist_shape` — `interview_checklist`/
+`verification_checklist` строго `list[str]` (автоматизирует находку,
+исправленную вручную перед Этапом 7 — незакавыченный `": "` внутри пункта
+чек-листа YAML превращает его в dict); (5) `cross_section` — каждая Task
+из `milestones` присутствует в `dependencies`, `effort_estimates` и
+`sprint_plan.task_sprint`, и наоборот.
+
+`--selftest` намеренно ломает копию `agent/examples/client-abc.plan.json`
+под каждую из 5 проверок и подтверждает, что она срабатывает, плюс
+regression-прогон на самом `client-abc.plan.json`: ожидается ровно 16
+находок — уже задокументированная `open-issues.md` п.1 проблема
+(`used_by` на Milestone ID), не новая; всё остальное должно быть чисто.
+При реализации найден и исправлен (в `assemble_plan.py`, не в шаблоне)
+второй случай той же проблемы, что у `T-6.5.1.depends_on` (Этап 6) —
+`T-6.4.1.used_by` тоже ссылался на слот `T-6.4.2` (см. `open-issues.md`
+п.4). Отчёт по примеру сохранён в
+`agent/examples/client-abc.validation-report.txt`.
 
 ## Этап 8 — Jira-экспорт
 **Статус: не начато.**

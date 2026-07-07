@@ -299,10 +299,10 @@ def flatten_tasks(milestones: list[dict]) -> list[dict]:
 def patch_stale_slot_dependencies(milestones: list[dict]) -> None:
     """Когда WBS-6.4 разворачивается в T-6.4.2.1..N (integrations непуст),
     T-6.4.2 как id перестаёт существовать. Другие Task, у которых
-    depends_on ссылался на T-6.4.2 (в шаблоне -- только T-6.5.1), должны
-    зависеть от всех сгенерированных child-Task, иначе это готовность к
-    интеграциям молча выпадает из графа зависимостей (topological_order
-    просто проигнорирует несуществующий id)."""
+    depends_on ИЛИ used_by ссылался на T-6.4.2 (в шаблоне -- T-6.5.1.depends_on
+    и T-6.4.1.used_by, симметрично друг другу), должны ссылаться на все
+    сгенерированные child-Task, иначе ссылка молча выпадает из графа
+    (topological_order/валидатор просто не найдёт несуществующий id)."""
     all_tasks = flatten_tasks(milestones)
     ids = {t["id"] for t in all_tasks}
     if "T-6.4.2" in ids:
@@ -311,9 +311,10 @@ def patch_stale_slot_dependencies(milestones: list[dict]) -> None:
     if not generated_ids:
         return
     for t in all_tasks:
-        deps = t.get("depends_on") or []
-        if "T-6.4.2" in deps:
-            t["depends_on"] = [d for d in deps if d != "T-6.4.2"] + generated_ids
+        for field_name in ("depends_on", "used_by"):
+            values = t.get(field_name) or []
+            if "T-6.4.2" in values:
+                t[field_name] = [v for v in values if v != "T-6.4.2"] + generated_ids
 
 
 # ---------------------------------------------------------------------------
@@ -776,13 +777,20 @@ def run_selftest() -> None:
     assert unresolved == ["НеизвестнаяСистема"], unresolved
     print("[selftest] WBS-6.4 вариативность (integrations пуст/непуст/неизвестная интеграция) -- OK")
 
-    # Регрессия: T-6.5.1 в шаблоне зависит от T-6.4.2 -- при развороте
-    # WBS-6.4 эта зависимость должна переехать на все сгенерированные
-    # T-6.4.2.x, а не молча выпасть из графа (см. patch_stale_slot_dependencies).
-    t651 = next(t for m in milestones_with for w in m["wbs"] for t in w["tasks"] if t["id"] == "T-6.5.1")
+    # Регрессия: T-6.5.1.depends_on и T-6.4.1.used_by в шаблоне ссылаются на
+    # T-6.4.2 -- при развороте WBS-6.4 обе ссылки должны переехать на все
+    # сгенерированные T-6.4.2.x, а не молча выпасть из графа (см.
+    # patch_stale_slot_dependencies).
+    all_tasks_with = flatten_tasks(milestones_with)
+    t651 = next(t for t in all_tasks_with if t["id"] == "T-6.5.1")
     assert "T-6.4.2" not in t651["depends_on"], t651["depends_on"]
     assert set(generated_ids) <= set(t651["depends_on"]), t651["depends_on"]
     print(f"[selftest] T-6.5.1.depends_on после разворота WBS-6.4 = {t651['depends_on']} -- OK")
+
+    t641 = next(t for t in all_tasks_with if t["id"] == "T-6.4.1")
+    assert "T-6.4.2" not in t641["used_by"], t641["used_by"]
+    assert set(generated_ids) <= set(t641["used_by"]), t641["used_by"]
+    print(f"[selftest] T-6.4.1.used_by после разворота WBS-6.4 = {t641['used_by']} -- OK")
 
     milestones_empty, unresolved_empty = build_milestones(template_schema, tasks_by_milestone, integrations=[])
     m6e = next(m for m in milestones_empty if m["id"] == "M6")
