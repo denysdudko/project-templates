@@ -1,0 +1,12 @@
+{
+  "project_name": "Внедрение Comarch e-Sklep B2B для клиента ABC",
+  "client": "ABC sp. z o.o.",
+  "erp": {
+    "system": "Comarch ERP Optima"
+  },
+  "users_count": 35,
+  "integrations": ["Baselinker", "DHL", "PayU"],
+  "features": ["individual_prices", "credit_limits", "multiple_warehouses"],
+  "start_date": "2026-08-03",
+  "target_launch_date": "2026-10-26"
+}

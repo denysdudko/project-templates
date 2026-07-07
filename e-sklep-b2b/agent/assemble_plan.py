@@ -1,0 +1,872 @@
+#!/usr/bin/env python3
+"""Этап 6 — сборка итогового плана внедрения Comarch e-Sklep B2B.
+
+Пайплайн: Charter -> Milestones -> WBS -> Tasks -> Dependencies ->
+Оценки (effort-estimates.yaml) -> Sprint-план (sprint-mapping-rules.md) ->
+Риски (risk-register.yaml) -> Deliverables.
+
+Источники (не переопределяются этим файлом, только читаются):
+  schema/milestones_wbs.yaml, tasks/M*_tasks.yaml   -- структура и Task
+  docs/selection-rules.md                            -- вариативность WBS-6.4
+  agent/effort-estimates.yaml                        -- Этап 3
+  agent/sprint-mapping-rules.md                      -- Этап 5 (алгоритм ниже
+                                                         реализует его буквально)
+  agent/risk-register.yaml                           -- Этап 4
+
+`schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` этим скриптом не
+изменяются — только читаются.
+
+Запуск:
+    python3 assemble_plan.py --input path/to/client-input.json --output plan.json
+    python3 assemble_plan.py --selftest
+"""
+
+from __future__ import annotations
+
+import argparse
+import heapq
+import json
+import math
+import sys
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+AGENT_DIR = Path(__file__).resolve().parent
+TEMPLATE_ROOT = AGENT_DIR.parent
+
+# ---------------------------------------------------------------------------
+# Константы v1 (agent/sprint-mapping-rules.md, раздел "Константы v1")
+# ---------------------------------------------------------------------------
+
+SPRINT_LENGTH_WEEKS = 2
+HOURS_PER_WORKING_DAY = 8
+CAPACITY_PER_SPRINT_HOURS = SPRINT_LENGTH_WEEKS * 5 * HOURS_PER_WORKING_DAY  # 80
+REMEDIATION_BUFFER_HOURS = 0.2 * CAPACITY_PER_SPRINT_HOURS  # 16
+
+LAUNCH_TASK_ID = "T-9.2.2"  # WBS-9.2, "запуск в эксплуатацию" (fit-check gate)
+SUPPORT_MONITORING_TASK_ID = "T-9.3.2"  # исключена из обычного bin-packing
+
+# Task, для которых keyword-эвристика Этапа 3 не даёт совпадения, но
+# правильный тип однозначно следует из description самой Task (а не
+# придуман заново). Пример: T-9.3.1 называется "Определить период и
+# порядок гиперподдержки", но его description буквально начинается со
+# слова "Согласовать с заказчиком..." — то есть это Tier negotiation,
+# просто в Task.name выбран синоним, не входящий в keywords
+# effort-estimates.yaml. Это находка при реализации Этапа 6, а не
+# самостоятельная переоценка типов — effort-estimates.yaml не менялся.
+# Каждая запись обязана быть задокументирована здесь с обоснованием.
+MANUAL_TASK_TYPE_OVERRIDES: dict[str, tuple[str, str]] = {
+    "T-9.3.1": (
+        "negotiation",
+        'description задачи начинается с "Согласовать с заказчиком продолжительность '
+        'периода..." — тот же глагол, что и keyword "Согласовать", просто в Task.name '
+        'использован синоним "Определить".',
+    ),
+    "T-8.1.1": (
+        "negotiation",
+        'description начинается с "Согласовать с заказчиком, кто из сотрудников..." '
+        '— тот же случай, что T-9.3.1: в Task.name использован синоним "Определить".',
+    ),
+    "T-2.1.2": (
+        "negotiation",
+        'Точечное подтверждение с заказчиком одного набора данных (название компании, '
+        'магазина, PIN из письма активации) — по объёму и природе работы то же самое, '
+        'что и "Согласовать" (узкий, суженный набор параметров), просто без этого '
+        'глагола в названии.',
+    ),
+    "T-5.5.1": (
+        "verification",
+        'Запуск синхронизации и проверка результата ("Проверить, что синхронизация '
+        'завершилась без сообщений об ошибке") — тот же паттерн, что T-3.3.1 '
+        '"Выполнить тестовую синхронизацию" и T-9.2.1 "Выполнить контрольную '
+        'синхронизацию" (оба классифицируются как verification по keyword), только '
+        'использовано слово "первую" вместо "тестовую"/"контрольную".',
+    ),
+    "T-6.2.5": (
+        "verification",
+        'Тот же паттерн "Выполнить синхронизацию + проверить результат", что и '
+        'T-5.5.1/T-3.3.1/T-9.2.1.',
+    ),
+    "T-7.1.2": (
+        "synthesis_reporting",
+        'Небольшая задача (согласовать состав демо-сценария на основе уже собранных '
+        'в T-7.1.1 результатов) — по объёму и характеру работы (сведение уже '
+        'существующих решений в документ) ближе к synthesis_reporting (1-3ч), чем к '
+        'content_data_preparation (4-16ч, рассчитан на объём каталога товаров).',
+    ),
+    "T-7.2.2": (
+        "synthesis_reporting",
+        'Фиксация (агрегация) замечаний заказчика по итогам демонстрации в протокол '
+        '— соответствует определению synthesis_reporting ("Агрегация результатов... '
+        'в единый документ"), просто в названии использован глагол "Зафиксировать" '
+        'вместо "Свести".',
+    ),
+}
+
+# Известные интеграции -> проверенная (curl, 2026-07-07) официальная статья
+# документации Comarch. selection-rules.md запрещает "придумывать" source.url
+# для WBS-6.4 — интеграция вне этой карты не разворачивается в Task
+# автоматически (см. build_wbs_6_4_tasks: попадает в meta.unresolved_integrations,
+# и это ровно сценарий риска R-2 в risk-register.yaml).
+KNOWN_INTEGRATION_DOCS: dict[str, str] = {
+    "baselinker": "https://pomoc.comarchesklep.pl/artykul/jak-podlaczyc-konto-baselinker-w-comarch-e-sklep/",
+    "dhl": "https://pomoc.comarchesklep.pl/artykul/jak-przeprowadzic-integracje-dostawy-z-dhl/",
+    "payu": "https://pomoc.comarchesklep.pl/artykul/payu-konfiguracja/",
+}
+
+ALLOWED_FEATURES = {"individual_prices", "credit_limits", "multiple_warehouses"}
+REQUIRED_INPUT_FIELDS = [
+    "project_name",
+    "client",
+    "erp",
+    "users_count",
+    "start_date",
+    "target_launch_date",
+]
+
+
+# ---------------------------------------------------------------------------
+# Загрузка
+# ---------------------------------------------------------------------------
+
+
+def load_json(path: Path) -> Any:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_yaml(path: Path) -> Any:
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def parse_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def validate_input(data: dict) -> dict:
+    missing = [f for f in REQUIRED_INPUT_FIELDS if f not in data]
+    if missing:
+        raise ValueError(f"input-schema.json: отсутствуют обязательные поля: {missing}")
+    if data["erp"].get("system") != "Comarch ERP Optima":
+        raise ValueError(
+            "input-schema.json: erp.system вне enum — v1 шаблона покрывает "
+            "только 'Comarch ERP Optima'"
+        )
+    if data["users_count"] < 1:
+        raise ValueError("input-schema.json: users_count должен быть >= 1")
+    unknown_features = set(data.get("features", [])) - ALLOWED_FEATURES
+    if unknown_features:
+        raise ValueError(
+            f"input-schema.json: features вне enum, не покрыты шаблоном: {unknown_features}"
+        )
+    start = parse_date(data["start_date"])
+    target = parse_date(data["target_launch_date"])
+    if target <= start:
+        raise ValueError("input-schema.json: target_launch_date должен быть позже start_date")
+    return data
+
+
+def load_template() -> tuple[dict, dict[str, dict]]:
+    schema = load_yaml(TEMPLATE_ROOT / "schema" / "milestones_wbs.yaml")
+    tasks_by_milestone = {}
+    for i in range(1, 10):
+        mid = f"M{i}"
+        tasks_by_milestone[mid] = load_yaml(TEMPLATE_ROOT / "tasks" / f"{mid}_tasks.yaml")
+    return schema, tasks_by_milestone
+
+
+# ---------------------------------------------------------------------------
+# Charter
+# ---------------------------------------------------------------------------
+
+
+def build_charter(input_data: dict, template_schema: dict) -> dict:
+    project = template_schema["project"]
+    start = parse_date(input_data["start_date"])
+    target = parse_date(input_data["target_launch_date"])
+    requested_weeks = (target - start).days / 7
+    return {
+        "project_name": input_data["project_name"],
+        "client": input_data["client"],
+        "product": project.get("product"),
+        "description": (project.get("description") or "").strip(),
+        "objective": (project.get("objective") or "").strip(),
+        "erp": input_data["erp"],
+        "users_count": input_data["users_count"],
+        "integrations": input_data.get("integrations", []),
+        "features": input_data.get("features", []),
+        "start_date": input_data["start_date"],
+        "target_launch_date": input_data["target_launch_date"],
+        "target_launch_date_definition": (
+            "target_launch_date -- дата запуска магазина в эксплуатацию (WBS-9.2, "
+            f"{LAUNCH_TASK_ID}), не дата закрытия всего проекта. Гиперподдержка "
+            "(WBS-9.3) и формальное завершение проекта (WBS-9.4) продолжаются "
+            "после этой даты (см. agent/sprint-mapping-rules.md, раздел "
+            '"Гиперподдержка после запуска").'
+        ),
+        "requested_duration_weeks": round(requested_weeks, 1),
+        "template_default_duration_weeks": project.get("default_duration_weeks"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Milestones / WBS / Tasks (+ вариативность WBS-6.4 из selection-rules.md)
+# ---------------------------------------------------------------------------
+
+
+def lookup_integration_doc(name: str) -> str | None:
+    return KNOWN_INTEGRATION_DOCS.get(name.strip().lower())
+
+
+def build_wbs_6_4_tasks(base_tasks: list[dict], integrations: list[str]) -> tuple[list[dict], list[str]]:
+    """selection-rules.md, раздел "Правило для WBS-6.4"."""
+    if not integrations:
+        return [dict(t) for t in base_tasks], []
+
+    t_6_4_1 = next(dict(t) for t in base_tasks if t["id"] == "T-6.4.1")
+    result = [t_6_4_1]
+    unresolved: list[str] = []
+    for idx, name in enumerate(integrations, start=1):
+        doc_url = lookup_integration_doc(name)
+        if doc_url is None:
+            unresolved.append(name)
+            continue
+        result.append(
+            {
+                "id": f"T-6.4.2.{idx}",
+                "name": f"Настроить интеграцию {name} согласно документации Comarch",
+                "performer": "Консультант",
+                "depends_on": ["T-6.4.1"],
+                "source": {"type": "Official Comarch Documentation", "url": doc_url},
+                "result": [f"Настроенная и активная интеграция {name}"],
+                "used_by": ["WBS-6.5"],
+                "interview_checklist": [],
+                "verification_checklist": [
+                    f"Проверить, что интеграция {name} активна и работает согласно её документации."
+                ],
+                "generated_from": "T-6.4.2",
+            }
+        )
+    return result, unresolved
+
+
+def build_milestones(
+    template_schema: dict, tasks_by_milestone: dict[str, dict], integrations: list[str]
+) -> tuple[list[dict], list[str]]:
+    milestones = []
+    unresolved_integrations: list[str] = []
+    for m in template_schema["milestones"]:
+        mid = m["id"]
+        tasks_doc = tasks_by_milestone[mid]
+        tasks_by_wbs = {block["wbs"]: block["tasks"] for block in tasks_doc["tasks"]}
+        wbs_out = []
+        for wbs_def in m["wbs"]:
+            wbs_id = wbs_def["id"]
+            tasks = tasks_by_wbs.get(wbs_id, [])
+            if wbs_id == "WBS-6.4":
+                tasks, unresolved = build_wbs_6_4_tasks(tasks, integrations)
+                unresolved_integrations.extend(unresolved)
+            else:
+                tasks = [dict(t) for t in tasks]
+            wbs_out.append(
+                {
+                    "id": wbs_id,
+                    "name": wbs_def["name"],
+                    "description": (wbs_def.get("description") or "").strip(),
+                    "tasks": tasks,
+                }
+            )
+        milestones.append(
+            {
+                "id": mid,
+                "name": m["name"],
+                "description": (m.get("description") or "").strip(),
+                "wbs": wbs_out,
+            }
+        )
+    patch_stale_slot_dependencies(milestones)
+    return milestones, unresolved_integrations
+
+
+def flatten_tasks(milestones: list[dict]) -> list[dict]:
+    return [t for m in milestones for wbs in m["wbs"] for t in wbs["tasks"]]
+
+
+def patch_stale_slot_dependencies(milestones: list[dict]) -> None:
+    """Когда WBS-6.4 разворачивается в T-6.4.2.1..N (integrations непуст),
+    T-6.4.2 как id перестаёт существовать. Другие Task, у которых
+    depends_on ссылался на T-6.4.2 (в шаблоне -- только T-6.5.1), должны
+    зависеть от всех сгенерированных child-Task, иначе это готовность к
+    интеграциям молча выпадает из графа зависимостей (topological_order
+    просто проигнорирует несуществующий id)."""
+    all_tasks = flatten_tasks(milestones)
+    ids = {t["id"] for t in all_tasks}
+    if "T-6.4.2" in ids:
+        return  # WBS-6.4 не разворачивалась (integrations пуст) -- патчить нечего
+    generated_ids = sorted(tid for tid in ids if tid.startswith("T-6.4.2."))
+    if not generated_ids:
+        return
+    for t in all_tasks:
+        deps = t.get("depends_on") or []
+        if "T-6.4.2" in deps:
+            t["depends_on"] = [d for d in deps if d != "T-6.4.2"] + generated_ids
+
+
+# ---------------------------------------------------------------------------
+# Dependencies -- из шаблона, без изменений (used_by не используется как
+# источник порядка, см. sprint-mapping-rules.md и open-issues.md п.1)
+# ---------------------------------------------------------------------------
+
+
+def build_dependencies(all_tasks: list[dict]) -> dict[str, list[str]]:
+    return {t["id"]: list(t.get("depends_on") or []) for t in all_tasks}
+
+
+# ---------------------------------------------------------------------------
+# Оценки трудозатрат (effort-estimates.yaml, Этап 3)
+# ---------------------------------------------------------------------------
+
+
+def classify_task(task: dict, task_types: list[dict]) -> str | None:
+    name = task["name"]
+    candidates = []
+    for tt in task_types:
+        for kw in tt["keywords"]:
+            # "Глагол в начале Task.name" (effort-estimates.yaml) обычно
+            # означает startswith, но иногда перед глаголом стоит наречие
+            # ("Формально закрыть проект") -- проверяем вхождение в первые
+            # три слова, а не жёсткий префикс.
+            prefix = " ".join(name.split()[:3]).lower()
+            if kw.lower() in prefix:
+                candidates.append((len(kw), tt["id"]))
+    if not candidates:
+        override = MANUAL_TASK_TYPE_OVERRIDES.get(task["id"])
+        return override[0] if override else None
+    candidates.sort(reverse=True)
+    top_len = candidates[0][0]
+    top_matches = {c[1] for c in candidates if c[0] == top_len}
+    if len(top_matches) > 1:
+        raise ValueError(
+            f"{task['id']}: неоднозначная классификация по keyword-эвристике "
+            f"(кандидаты одинаковой длины: {sorted(top_matches)}) -- нужен "
+            f"fallback по чек-листам/WBS-контексту (effort-estimates.yaml, "
+            f"task_type_matching_rule), который в этом скрипте не покрыт "
+            f"автоматически."
+        )
+    return candidates[0][1]
+
+
+def effort_for_task(task_type_id: str, task_types_by_id: dict[str, dict]) -> dict:
+    tt = task_types_by_id[task_type_id]
+    base = tt.get("base_estimate_hours")
+
+    if task_type_id == "remediation":
+        return {
+            "task_type": task_type_id,
+            "hours": REMEDIATION_BUFFER_HOURS,
+            "basis": "remediation_buffer_hours (константа v1, sprint-mapping-rules.md)",
+        }
+    if task_type_id == "support_monitoring":
+        midpoint_per_week = (base["min"] + base["max"]) / 2
+        return {
+            "task_type": task_type_id,
+            "hours_per_week": midpoint_per_week,
+            "basis": "support_monitoring: недельная нагрузка, не point-оценка на Task",
+        }
+    if base is None:
+        raise ValueError(f"Тип {task_type_id}: base_estimate_hours отсутствует и не является особым случаем")
+    midpoint = (base["min"] + base["max"]) / 2
+    return {
+        "task_type": task_type_id,
+        "hours": midpoint,
+        "basis": f"середина диапазона base_estimate_hours [{base['min']}, {base['max']}] для типа {task_type_id}",
+    }
+
+
+def build_effort_estimates(all_tasks: list[dict], effort_ref: dict) -> dict[str, dict]:
+    task_types = effort_ref["task_types"]
+    task_types_by_id = {t["id"]: t for t in task_types}
+    estimates = {}
+    for t in all_tasks:
+        type_id = classify_task(t, task_types)
+        if type_id is None:
+            raise ValueError(
+                f"{t['id']} ({t['name']!r}): keyword-эвристика effort-estimates.yaml "
+                f"не дала совпадения и нет override в MANUAL_TASK_TYPE_OVERRIDES -- "
+                f"Task не может быть распределена без ручной классификации."
+            )
+        estimates[t["id"]] = effort_for_task(type_id, task_types_by_id)
+    return estimates
+
+
+# ---------------------------------------------------------------------------
+# Sprint-план (agent/sprint-mapping-rules.md, Этап 5)
+# ---------------------------------------------------------------------------
+
+
+def topological_order(task_ids: list[str], depends_on: dict[str, list[str]]) -> list[str]:
+    """Kahn's algorithm; тай-брейк = порядок в task_ids (шаблон)."""
+    order_index = {tid: i for i, tid in enumerate(task_ids)}
+    id_set = set(task_ids)
+    indegree = {tid: 0 for tid in task_ids}
+    dependents: dict[str, list[str]] = {tid: [] for tid in task_ids}
+    for tid in task_ids:
+        for dep in depends_on.get(tid, []):
+            if dep not in id_set:
+                continue
+            indegree[tid] += 1
+            dependents[dep].append(tid)
+    heap = [(order_index[tid], tid) for tid in task_ids if indegree[tid] == 0]
+    heapq.heapify(heap)
+    result = []
+    while heap:
+        _, tid = heapq.heappop(heap)
+        result.append(tid)
+        for nxt in dependents[tid]:
+            indegree[nxt] -= 1
+            if indegree[nxt] == 0:
+                heapq.heappush(heap, (order_index[nxt], nxt))
+    if len(result) != len(task_ids):
+        missing = sorted(set(task_ids) - set(result))
+        raise ValueError(f"Цикл в depends_on или недостижимые Task: {missing}")
+    return result
+
+
+class SprintBook:
+    """Учёт занятой трудоёмкости по спринтам для жадного распределения."""
+
+    def __init__(self) -> None:
+        self.sprints: list[dict] = []  # [{sprint, task_ids, hours_used}]
+
+    def _ensure(self, n: int) -> dict:
+        while len(self.sprints) < n:
+            self.sprints.append({"sprint": len(self.sprints) + 1, "task_ids": [], "hours_used": 0.0})
+        return self.sprints[n - 1]
+
+    def assign(self, task_id: str, min_sprint: int, hours: float) -> int:
+        s = max(min_sprint, 1)
+        while True:
+            sprint_obj = self._ensure(s)
+            fits = sprint_obj["hours_used"] + hours <= CAPACITY_PER_SPRINT_HOURS
+            if fits or not sprint_obj["task_ids"]:
+                sprint_obj["task_ids"].append(task_id)
+                sprint_obj["hours_used"] += hours
+                return s
+            s += 1
+
+    def reserve_exclusive(self, task_id: str, sprint: int, hours_info: dict) -> None:
+        """Для T-9.3.2: отдельная строка, не конкурирует за capacity спринта."""
+        self._ensure(sprint)
+        self.sprints[sprint - 1].setdefault("reserved", []).append(
+            {"task_id": task_id, **hours_info}
+        )
+
+
+def build_sprint_plan(
+    all_tasks: list[dict],
+    depends_on: dict[str, list[str]],
+    effort: dict[str, dict],
+    start_date: date,
+    target_launch_date: date,
+) -> dict:
+    template_order = [t["id"] for t in all_tasks]
+
+    # Основной граф без T-9.3.2 (особый случай) -- как WBS-9.3/9.4 разбираются
+    # ниже отдельно, "После запуска" (см. agent/sprint-mapping-rules.md).
+    post_launch_ids = {"T-9.3.1", SUPPORT_MONITORING_TASK_ID, "T-9.3.3", "T-9.4.1", "T-9.4.2"}
+    main_ids = [tid for tid in template_order if tid not in post_launch_ids]
+
+    main_order = topological_order(main_ids, depends_on)
+    book = SprintBook()
+    task_sprint: dict[str, int] = {}
+    for tid in main_order:
+        deps = depends_on.get(tid, [])
+        min_sprint = 1
+        for d in deps:
+            if d in task_sprint:
+                min_sprint = max(min_sprint, task_sprint[d])
+        hours = effort[tid]["hours"]
+        task_sprint[tid] = book.assign(tid, min_sprint, hours)
+
+    if LAUNCH_TASK_ID not in task_sprint:
+        raise ValueError(f"{LAUNCH_TASK_ID} (запуск, WBS-9.2) не распределён -- проверь depends_on")
+    launch_sprint = task_sprint[LAUNCH_TASK_ID]
+
+    # "Гиперподдержка после запуска" -- WBS-9.3/9.4 планируются после
+    # launch_sprint тем же алгоритмом, но с явным floor по min_sprint, т.к.
+    # T-9.3.1 не имеет depends_on в шаблоне (иначе встал бы в спринт 1).
+    post_order = topological_order(
+        [tid for tid in template_order if tid in post_launch_ids and tid != SUPPORT_MONITORING_TASK_ID],
+        depends_on,
+    )
+    floor_sprint = launch_sprint + 1
+    for tid in post_order:
+        deps = [d for d in depends_on.get(tid, []) if d != SUPPORT_MONITORING_TASK_ID]
+        min_sprint = floor_sprint
+        for d in deps:
+            if d in task_sprint:
+                min_sprint = max(min_sprint, task_sprint[d])
+        # T-9.3.3 depends_on T-9.3.2 (искл. из графа) -- должна идти строго
+        # после зарезервированного спринта T-9.3.2, добавляется ниже отдельно.
+        hours = effort[tid]["hours"]
+        task_sprint[tid] = book.assign(tid, min_sprint, hours)
+        if tid == "T-9.3.1":
+            # T-9.3.2 зависит от T-9.3.1 (depends_on в шаблоне) -- резервируем
+            # сразу следующий спринт под неё как отдельную строку нагрузки.
+            support_sprint = task_sprint["T-9.3.1"] + 1
+            book.reserve_exclusive(SUPPORT_MONITORING_TASK_ID, support_sprint, effort[SUPPORT_MONITORING_TASK_ID])
+            task_sprint[SUPPORT_MONITORING_TASK_ID] = support_sprint
+            floor_sprint = max(floor_sprint, support_sprint + 1)
+
+    available_sprints = math.ceil(
+        (target_launch_date - start_date).days / (SPRINT_LENGTH_WEEKS * 7)
+    )
+    fits = launch_sprint <= available_sprints
+
+    return {
+        "sprint_length_weeks": SPRINT_LENGTH_WEEKS,
+        "capacity_per_sprint_hours": CAPACITY_PER_SPRINT_HOURS,
+        "sprints": book.sprints,
+        "task_sprint": task_sprint,
+        "launch_task_id": LAUNCH_TASK_ID,
+        "total_sprints_used": launch_sprint,
+        "available_sprints": available_sprints,
+        "fits_in_target_launch_date": fits,
+        "warning": None
+        if fits
+        else (
+            f"Расчётный план требует {launch_sprint} спринтов до запуска "
+            f"({LAUNCH_TASK_ID}), доступно {available_sprints} между start_date "
+            f"и target_launch_date -- дефицит {launch_sprint - available_sprints} "
+            f"спринт(ов) (~{(launch_sprint - available_sprints) * SPRINT_LENGTH_WEEKS} нед.). "
+            f"Решение (сдвиг target_launch_date / увеличение capacity / "
+            f"сокращение объёма) -- за консультантом/PM, не за агентом."
+        ),
+        "post_launch_note": (
+            "WBS-9.3 (Гиперподдержка) и WBS-9.4 (Завершение проекта) запланированы "
+            "после launch_sprint и не входят в fits_in_target_launch_date -- это "
+            "ожидаемое продолжение работ после запуска, не дефицит времени."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Риски (agent/risk-register.yaml, Этап 4)
+# ---------------------------------------------------------------------------
+
+
+def evaluate_condition(risk_id: str, condition_text: str, ctx: dict) -> bool:
+    if risk_id == "R-1":
+        return not ctx["erp"].get("version")
+    if risk_id == "R-7":
+        sr = ctx["sprint_result"]
+        return not sr["fits_in_target_launch_date"]
+    # R-2..R-6: условие -- буквальное Python-булево выражение над
+    # integrations/features/users_count/erp (см. risk-register.yaml,
+    # condition_language). eval() в ограниченном пространстве имён --
+    # осознанное решение (YAML этого файла контролируется тем же
+    # репозиторием, не внешним вводом), а не обход валидации.
+    safe_globals = {"__builtins__": {}}
+    safe_locals = {
+        "integrations": ctx["integrations"],
+        "features": ctx["features"],
+        "users_count": ctx["users_count"],
+        "erp": ctx["erp"],
+        "len": len,
+    }
+    try:
+        return bool(eval(condition_text.strip(), safe_globals, safe_locals))
+    except Exception as exc:  # noqa: BLE001 -- нужно явное сообщение с id риска
+        raise ValueError(f"Не удалось вычислить condition риска {risk_id} ({condition_text!r}): {exc}") from exc
+
+
+def evaluate_risks(risk_register: dict, ctx: dict) -> list[dict]:
+    applicable = []
+    for r in risk_register["risks"]:
+        if evaluate_condition(r["id"], r["condition"], ctx):
+            applicable.append(r)
+    return applicable
+
+
+# ---------------------------------------------------------------------------
+# Deliverables -- агрегация verification_checklist, без новых формулировок
+# ---------------------------------------------------------------------------
+
+
+def build_deliverables(milestones: list[dict]) -> list[dict]:
+    deliverables = []
+    for m in milestones:
+        items = []
+        for wbs in m["wbs"]:
+            for t in wbs["tasks"]:
+                for check in t.get("verification_checklist") or []:
+                    items.append({"task_id": t["id"], "wbs_id": wbs["id"], "check": check})
+        deliverables.append({"milestone_id": m["id"], "milestone_name": m["name"], "verification_checklist": items})
+    return deliverables
+
+
+# ---------------------------------------------------------------------------
+# LLM-слой (последний шаг) -- контракт, не реализация конкретного вызова
+# ---------------------------------------------------------------------------
+
+# Поля, которые LLM разрешено переписывать (только текст, не структуру).
+LLM_EDITABLE_TASK_FIELDS = {"description", "interview_checklist", "verification_checklist"}
+LLM_EDITABLE_CHARTER_FIELDS = {"description", "objective"}
+
+
+def _structure_fingerprint(plan: dict) -> tuple:
+    """Всё, что LLM НЕ имеет права менять: id/depends_on/used_by/состав."""
+    ids = []
+    for m in plan["milestones"]:
+        for wbs in m["wbs"]:
+            for t in wbs["tasks"]:
+                ids.append((t["id"], tuple(t.get("depends_on") or []), tuple(t.get("used_by") or [])))
+    milestone_ids = tuple(m["id"] for m in plan["milestones"])
+    wbs_ids = tuple(wbs["id"] for m in plan["milestones"] for wbs in m["wbs"])
+    return (milestone_ids, wbs_ids, tuple(sorted(ids)))
+
+
+def adapt_wording_with_llm(plan: dict, input_data: dict, llm_client=None) -> tuple[dict, dict]:
+    """Этап 6, последний шаг сборки.
+
+    Контракт: LLM адаптирует под клиента только формулировки -- Charter
+    (description/objective), Task.description, тексты
+    interview_checklist/verification_checklist. LLM не создаёт, не удаляет
+    и не переупорядочивает Milestone/WBS/Task, не трогает id/depends_on/
+    used_by/source.url. Это не реализация конкретного вызова к LLM (в
+    этом репозитории нет подключённого API) -- это enforced-контракт:
+    если llm_client передан и меняет структуру, adapt_wording_with_llm
+    отклоняет результат явной ошибкой, а не молча принимает его.
+    """
+    if llm_client is None:
+        return plan, {"llm_step": "skipped", "reason": "llm_client не передан -- passthrough без изменений"}
+
+    before = _structure_fingerprint(plan)
+    adapted = llm_client.adapt(plan, input_data, editable_task_fields=LLM_EDITABLE_TASK_FIELDS, editable_charter_fields=LLM_EDITABLE_CHARTER_FIELDS)
+    after = _structure_fingerprint(adapted)
+    if before != after:
+        raise ValueError(
+            "LLM-адаптация изменила структуру плана (id/depends_on/used_by/состав "
+            "Milestone/WBS/Task) -- отклонено по контракту Этапа 6."
+        )
+    return adapted, {"llm_step": "applied"}
+
+
+# ---------------------------------------------------------------------------
+# Оркестрация
+# ---------------------------------------------------------------------------
+
+
+def assemble_plan(input_data: dict, llm_client=None) -> dict:
+    input_data = validate_input(input_data)
+    template_schema, tasks_by_milestone = load_template()
+    effort_ref = load_yaml(AGENT_DIR / "effort-estimates.yaml")
+    risk_register = load_yaml(AGENT_DIR / "risk-register.yaml")
+
+    charter = build_charter(input_data, template_schema)
+    milestones, unresolved_integrations = build_milestones(
+        template_schema, tasks_by_milestone, input_data.get("integrations", [])
+    )
+    all_tasks = flatten_tasks(milestones)
+    dependencies = build_dependencies(all_tasks)
+    effort = build_effort_estimates(all_tasks, effort_ref)
+
+    sprint_result = build_sprint_plan(
+        all_tasks,
+        dependencies,
+        effort,
+        parse_date(input_data["start_date"]),
+        parse_date(input_data["target_launch_date"]),
+    )
+
+    risk_ctx = {
+        "erp": input_data["erp"],
+        "integrations": input_data.get("integrations", []),
+        "features": input_data.get("features", []),
+        "users_count": input_data["users_count"],
+        "sprint_result": sprint_result,
+    }
+    risks = evaluate_risks(risk_register, risk_ctx)
+
+    deliverables = build_deliverables(milestones)
+
+    plan = {
+        "charter": charter,
+        "milestones": milestones,
+        "dependencies": dependencies,
+        "effort_estimates": effort,
+        "sprint_plan": sprint_result,
+        "risks": risks,
+        "deliverables": deliverables,
+        "meta": {
+            "template_id": template_schema["template"]["id"],
+            "template_version": template_schema["template"]["version"],
+            "unresolved_integrations": unresolved_integrations,
+        },
+    }
+
+    plan, llm_meta = adapt_wording_with_llm(plan, input_data, llm_client=llm_client)
+    plan["meta"]["llm_adaptation"] = llm_meta
+    return plan
+
+
+# ---------------------------------------------------------------------------
+# Self-test -- сверка эвристики классификации против реального шаблона
+# ---------------------------------------------------------------------------
+
+
+def run_selftest() -> None:
+    template_schema, tasks_by_milestone = load_template()
+    effort_ref = load_yaml(AGENT_DIR / "effort-estimates.yaml")
+    task_types = effort_ref["task_types"]
+    task_types_by_id = {t["id"]: t for t in task_types}
+
+    milestones, _ = build_milestones(template_schema, tasks_by_milestone, integrations=[])
+    all_tasks = flatten_tasks(milestones)
+    print(f"[selftest] Task в шаблоне (без вариативности WBS-6.4): {len(all_tasks)}")
+
+    failures = []
+    classified: dict[str, str] = {}
+    for t in all_tasks:
+        try:
+            type_id = classify_task(t, task_types)
+        except ValueError as exc:
+            failures.append(f"{t['id']}: {exc}")
+            continue
+        if type_id is None:
+            failures.append(f"{t['id']} ({t['name']!r}): нет совпадения по keyword и нет override")
+            continue
+        classified[t["id"]] = type_id
+
+    mismatches = []
+    for tt in task_types:
+        for example_id in tt.get("examples", []):
+            got = classified.get(example_id)
+            if got != tt["id"]:
+                mismatches.append(f"{example_id}: effort-estimates.yaml объявляет {tt['id']!r}, классификатор дал {got!r}")
+
+    if failures:
+        print(f"[selftest] НЕ КЛАССИФИЦИРОВАНО: {len(failures)}")
+        for f in failures:
+            print("  -", f)
+    else:
+        print("[selftest] Все Task шаблона классифицированы по типу -- OK")
+
+    if mismatches:
+        print(f"[selftest] Расхождения с examples в effort-estimates.yaml: {len(mismatches)}")
+        for m in mismatches:
+            print("  -", m)
+    else:
+        print("[selftest] Классификация совпадает с examples в effort-estimates.yaml -- OK")
+
+    # Прогон варианта WBS-6.4 с интеграциями + неизвестной интеграцией.
+    milestones_with, unresolved = build_milestones(
+        template_schema, tasks_by_milestone, integrations=["Baselinker", "DHL", "PayU", "НеизвестнаяСистема"]
+    )
+    m6 = next(m for m in milestones_with if m["id"] == "M6")
+    wbs64 = next(w for w in m6["wbs"] if w["id"] == "WBS-6.4")
+    generated_ids = [t["id"] for t in wbs64["tasks"] if t["id"] != "T-6.4.1"]
+    print(f"[selftest] WBS-6.4 c 4 интеграциями (1 неизвестная): сгенерировано Task = {generated_ids}")
+    print(f"[selftest] unresolved_integrations = {unresolved}")
+    assert generated_ids == ["T-6.4.2.1", "T-6.4.2.2", "T-6.4.2.3"], generated_ids
+    assert unresolved == ["НеизвестнаяСистема"], unresolved
+    print("[selftest] WBS-6.4 вариативность (integrations пуст/непуст/неизвестная интеграция) -- OK")
+
+    # Регрессия: T-6.5.1 в шаблоне зависит от T-6.4.2 -- при развороте
+    # WBS-6.4 эта зависимость должна переехать на все сгенерированные
+    # T-6.4.2.x, а не молча выпасть из графа (см. patch_stale_slot_dependencies).
+    t651 = next(t for m in milestones_with for w in m["wbs"] for t in w["tasks"] if t["id"] == "T-6.5.1")
+    assert "T-6.4.2" not in t651["depends_on"], t651["depends_on"]
+    assert set(generated_ids) <= set(t651["depends_on"]), t651["depends_on"]
+    print(f"[selftest] T-6.5.1.depends_on после разворота WBS-6.4 = {t651['depends_on']} -- OK")
+
+    milestones_empty, unresolved_empty = build_milestones(template_schema, tasks_by_milestone, integrations=[])
+    m6e = next(m for m in milestones_empty if m["id"] == "M6")
+    wbs64e = next(w for w in m6e["wbs"] if w["id"] == "WBS-6.4")
+    assert [t["id"] for t in wbs64e["tasks"]] == ["T-6.4.1", "T-6.4.2"], wbs64e["tasks"]
+    assert unresolved_empty == []
+    print("[selftest] WBS-6.4 при пустых integrations остаётся T-6.4.1/T-6.4.2 -- OK")
+
+    # Прогон с заведомо тесным сроком -- должна сработать ветка
+    # "не укладывается в срок" (fits=False, warning заполнен, R-7 в risks).
+    tight_input = {
+        "project_name": "Selftest: tight deadline",
+        "client": "Selftest sp. z o.o.",
+        "erp": {"system": "Comarch ERP Optima"},
+        "users_count": 5,
+        "integrations": [],
+        "features": [],
+        "start_date": "2026-08-03",
+        "target_launch_date": "2026-08-17",  # 2 недели = 1 спринт
+    }
+    tight_plan = assemble_plan(dict(tight_input))
+    tsp = tight_plan["sprint_plan"]
+    assert tsp["fits_in_target_launch_date"] is False, tsp
+    assert tsp["warning"], "warning должен быть заполнен при дефиците спринтов"
+    risk_ids = {r["id"] for r in tight_plan["risks"]}
+    assert "R-7" in risk_ids, risk_ids
+    print(
+        f"[selftest] Тесный срок: total_sprints_used={tsp['total_sprints_used']}, "
+        f"available_sprints={tsp['available_sprints']}, R-7 в risks -- OK"
+    )
+
+    # Контракт LLM-слоя: если llm_client меняет структуру -- adapt_wording_with_llm
+    # обязан отклонить результат, а не молча принять.
+    class _StructureBreakingLLM:
+        def adapt(self, plan, input_data, **kwargs):
+            broken = json.loads(json.dumps(plan))
+            broken["milestones"][0]["wbs"][0]["tasks"].pop()  # удалили Task -- нарушение контракта
+            return broken
+
+    try:
+        adapt_wording_with_llm(tight_plan, tight_input, llm_client=_StructureBreakingLLM())
+    except ValueError:
+        print("[selftest] LLM-контракт: изменение структуры отклонено -- OK")
+    else:
+        failures.append("adapt_wording_with_llm не отклонил LLM-клиента, сломавшего структуру плана")
+
+    if failures or mismatches:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, help="Путь к заполненному input-schema.json клиента")
+    parser.add_argument("--output", type=Path, help="Куда записать итоговый план (по умолчанию -- stdout)")
+    parser.add_argument("--format", choices=["json", "yaml"], default="json")
+    parser.add_argument("--selftest", action="store_true", help="Прогнать самопроверку классификации без клиентского input")
+    args = parser.parse_args()
+
+    if args.selftest:
+        run_selftest()
+        return
+
+    if not args.input:
+        parser.error("--input обязателен (или используйте --selftest)")
+
+    input_data = load_json(args.input)
+    plan = assemble_plan(input_data)
+
+    if args.format == "json":
+        text = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
+    else:
+        text = yaml.safe_dump(plan, allow_unicode=True, sort_keys=False)
+
+    if args.output:
+        args.output.write_text(text, encoding="utf-8")
+        print(f"Записано: {args.output}", file=sys.stderr)
+    else:
+        print(text)
+
+
+if __name__ == "__main__":
+    main()

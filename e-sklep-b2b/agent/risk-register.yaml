@@ -112,20 +112,24 @@ risks:
 
   - id: R-7
     risk: >
-      Срок между start_date и target_launch_date заметно короче базовой
-      длительности проекта (project.default_duration_weeks: 12 в
-      schema/milestones_wbs.yaml) — объём работ M1–M9 может не
-      укладываться в срок без сокращения содержания или параллелизации
-      этапов.
-    condition: "(target_launch_date - start_date) < 8 недель"
+      Расчётное распределение Task по спринтам (agent/sprint-mapping-rules.md)
+      не укладывается между start_date и target_launch_date — суммарная
+      трудоёмкость M1–M9 по agent/effort-estimates.yaml с учётом depends_on
+      превышает доступное количество спринтов до запуска (WBS-9.2), без
+      сокращения содержания, увеличения capacity или сдвига даты.
+    condition: >
+      флаг "не укладывается в срок" из agent/sprint-mapping-rules.md
+      (шаг 5 алгоритма: total_sprints_used > available_sprints)
     related_wbs: [WBS-1.5]
     source:
       type: Internal Project Methodology
       note: >
-        Порог 8 недель — эвристика консультантов (около 2/3 от базовых
-        12 недель шаблона), а не факт из документации Comarch. Точный
-        порог предполагается уточнить на Этапе 5 (Milestone → Sprint) на
-        основе сумм оценок из agent/effort-estimates.yaml.
+        Условие — не отдельная эвристика, а прямая ссылка на результат
+        fit-check из agent/sprint-mapping-rules.md (Этап 5). Заменяет
+        прежний эвристический порог "8 недель", который был временным
+        приближением до появления расчёта по effort-estimates.yaml;
+        расчёт должен предшествовать отбору рисков при сборке плана
+        (см. Этап 6 в docs/agent-development-plan.md).
 
 v2_proposals:
   - Добавить в agent/input-schema.json поле объёма каталога (например
@@ -133,6 +137,3 @@ v2_proposals:
     описания, атрибуты — WBS-5.1–5.4) можно было включить в реестр с
     проверяемым condition. Без такого поля подобные риски condition не
     имеют и в этот реестр не включены.
-  - На Этапе 5 заменить эвристический порог R-7 (8 недель) расчётом от
-    суммы базовых оценок agent/effort-estimates.yaml для выбранного
-    состава WBS/Task.

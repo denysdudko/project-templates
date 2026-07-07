@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.9 — Сборка выходного пакета (Этап 6)
+- Добавлен `agent/assemble_plan.py` — исполняемый Python-пайплайн (не описание, а код): Charter → Milestones → WBS → Tasks (+ вариативность WBS-6.4) → Dependencies → Оценки (`effort-estimates.yaml`) → Sprint-план (`sprint-mapping-rules.md`) → Риски (`risk-register.yaml`, включая R-7 по факту Sprint-плана) → Deliverables (агрегация `verification_checklist`).
+- LLM подключается только последним шагом как enforced-контракт (`adapt_wording_with_llm`): разрешено менять только текстовые поля, попытка изменить структуру (id/depends_on/used_by/состав) отклоняется программно, а не только по описанию.
+- `--selftest`: классификация всех реальных Task M1–M9 по `effort-estimates.yaml`, сверка с `examples` справочника, обе ветки WBS-6.4 (включая интеграцию вне `KNOWN_INTEGRATION_DOCS`), ветка дефицита времени (R-7), отказ LLM-контракта при попытке сломать структуру.
+- Добавлен `agent/examples/client-abc.input.json` и результирующий `agent/examples/client-abc.plan.json` — прогон на примере клиента "ABC" из `agent/input-schema.json`.
+- Найдено и обработано без изменения предыдущих артефактов (см. `open-issues.md`, п.3–4): 7 Task не классифицируются по keyword-эвристике `effort-estimates.yaml` (заведены точечные `MANUAL_TASK_TYPE_OVERRIDES` с обоснованием); `T-6.5.1.depends_on` ссылается на слот `T-6.4.2`, который пропадает при непустых `integrations` (обработано `patch_stale_slot_dependencies`).
+- `docs/agent-development-plan.md`: статус Этапа 6 обновлён на «готово». Этап 8 (Jira-экспорт) в пайплайн не входит.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
+## v1.8 — R-7 привязан к результату Sprint-плана; порядок сборки Этапа 6
+- `agent/risk-register.yaml`, R-7: условие заменено с эвристики "разрыв start_date/target_launch_date < 8 недель" на прямую ссылку на флаг "не укладывается в срок" из `agent/sprint-mapping-rules.md` (`total_sprints_used > available_sprints`, шаг 5 алгоритма); в `v2_proposals` убран пункт про эту замену — она выполнена.
+- `docs/agent-development-plan.md`, Этап 6: порядок сборки исправлен — Sprint-план (Этап 5) теперь идёт перед Рисками (Этап 4), а не после Deliverables, т.к. R-7 зависит от готового Sprint-плана.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.7 — Правило Milestone → Sprint (Этап 5)
 - Добавлен `agent/sprint-mapping-rules.md` — единый граф зависимостей по `depends_on` через все M1–M9 (включая межмилестоновые связи), топологический порядок с тай-брейком по шаблону, жадное распределение по спринтам с трудоёмкостью из `agent/effort-estimates.yaml`.
 - Контракт с `effort-estimates.yaml`: правило классифицирует Task по типу (эвристика Этапа 3) и берёт среднюю точку диапазона `base_estimate_hours`; для `remediation` (диапазон не задан в справочнике) введена отдельная константа-резерв `remediation_buffer_hours`; для `support_monitoring` (T-9.3.2, недельная нагрузка, а не оценка на Task) — отдельная обработка как нагрузки периода гиперподдержки после запуска.
