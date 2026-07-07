@@ -1,0 +1,111 @@
+# Risk Register — статичный справочник "риск → условие появления".
+#
+# Агент выбирает риски из этого файла по параметрам конкретного проекта
+# (input-schema.json), а не формулирует их заново. Риск без проверяемого
+# condition в реестр не включается (правило docs/principles.md).
+#
+# condition — выражение над полями input-schema.json (erp.version,
+# integrations, features, users_count, start_date, target_launch_date).
+# related_wbs — WBS/Task шаблона, к которому относится риск.
+# source — Official Comarch Documentation (с url) либо Internal Project
+# Methodology (см. docs/principles.md, иерархия источников истины).
+#
+# Оценка вероятности/критичности риска здесь не производится (см. v2).
+
+risks:
+
+  - id: R-1
+    risk: >
+      Версия Comarch ERP Optima не указана на старте проекта — соответствие
+      системным требованиям для e-Handel (NET Framework 4.5, Microsoft WSE
+      3.0 Runtime, SQLXML 4.0, минимум модули Kasa/Bank и Handel) нельзя
+      подтвердить до начала работ по WBS-2.1.
+    condition: erp.version is empty
+    related_wbs: WBS-2.1
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/wspolpraca-z-comarch-e-sklep/
+
+  - id: R-2
+    risk: >
+      Требуется функция срочных (временных) рабатов / индивидуальных цен из
+      ERP ("rabaty terminowe"), а версия Comarch ERP Optima ниже 2023.5
+      (или не указана) — по документации функция доступна только начиная с
+      Comarch ERP Optima 2023.5 (модуль Handel/Handel Plus) и Comarch
+      e-Sklep 2023.4.
+    condition: >
+      "individual_prices" in features and (erp.version is empty or
+      erp.version < "2023.5")
+    related_wbs: WBS-6.2
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/artykul/rabaty-z-comarch-erp-optima/
+
+  - id: R-3
+    risk: >
+      Требуется отображение лимита кредита и лимита просроченных платежей в
+      Strefie Klienta, а по документации это доступно только для шаблона
+      Szafir (не Rubin) при активной услуге Comarch e-Sklep Sync — выбор
+      графического шаблона в WBS-4.2 должен это учитывать, иначе результат
+      WBS-6.3 не будет виден покупателю.
+    condition: '"credit_limits" in features'
+    related_wbs: WBS-6.3
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/artykul/limit-kredytu-i-limit-przeterminowanych-platnosci/
+
+  - id: R-4
+    risk: >
+      Используется несколько складов, а по документации в Comarch e-Sklep
+      передаются остатки только с магазинов типа "lokalny" — остатки с
+      магазинов типа "serwisowy" в передаче не учитываются, что может дать
+      неполную картину доступности товара при согласовании складов в
+      T-2.3.2.
+    condition: '"multiple_warehouses" in features'
+    related_wbs: WBS-2.3
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+  - id: R-5
+    risk: >
+      Заказанная интеграция отсутствует в официальном каталоге интеграций
+      Comarch e-Sklep (раздел Integracje: маркетплейсы, платежи online,
+      порывнювачки цен, системы рассрочки, CRM-автоматизация, hurtownie,
+      leasing, аналитика, службы доставки) — для неё нет конкретной статьи
+      документации, и T-6.4.1/T-6.4.2 нельзя выполнить строго по правилу
+      selection-rules.md (source.url не может быть "придуман").
+    condition: >
+      integrations содержит значение, отсутствующее в официальном каталоге
+      интеграций по source.url
+    related_wbs: WBS-6.4
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/kategoria/integracje/
+
+  - id: R-6
+    risk: >
+      Среди интеграций указан провайдер онлайн-платежей, система рассрочки
+      или лизинг — по документации их корректная работа требует
+      установленного SSL-сертификата на домене магазина, что должно быть
+      закрыто до настройки способов оплаты (WBS-4.3), а не обнаружено по
+      факту сбоя оплаты.
+    condition: >
+      integrations содержит провайдера онлайн-платежей, системы рассрочки
+      или лизинга из каталога по source.url
+    related_wbs: WBS-4.3
+    source:
+      type: Official Comarch Documentation
+      url: https://pomoc.comarchesklep.pl/artykul/macierz-dostaw/
+
+  - id: R-7
+    risk: >
+      Срок между start_date и target_launch_date короче базовой
+      длительности проекта (project.default_duration_weeks в
+      schema/milestones_wbs.yaml) — сжатые сроки повышают риск для
+      milestones, требующих подготовки данных заказчиком и его согласований
+      (M1, M5, M7), которые шаблон не может ускорить.
+    condition: (target_launch_date - start_date) < project.default_duration_weeks
+    related_wbs: WBS-1.5
+    source:
+      type: Internal Project Methodology
