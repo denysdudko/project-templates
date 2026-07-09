@@ -117,13 +117,33 @@ def human_refs(ids: list[str], names: dict[str, str]) -> str:
     return ", ".join(seen)
 
 
-def aggregate_sprints(ids: list[str], task_sprint: dict) -> str:
-    sprints = sorted({task_sprint[i] for i in ids if i in task_sprint})
-    if not sprints:
+# sprint_plan.sprints[*].name -- "Спринт {N} (start-end[, метка])", вычислено
+# assemble_plan.py (agent/sprint-mapping-rules.md, "Именование спринтов").
+# Дата в скобках вырезается регуляркой, а не пересчитывается заново -- план
+# уже единственный источник дат спринта.
+SPRINT_NAME_DATE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})–(\d{4}-\d{2}-\d{2})(?:, [^)]+)?\)$")
+
+
+def build_sprint_by_number(plan: dict) -> dict[int, dict]:
+    return {s["sprint"]: s for s in plan.get("sprint_plan", {}).get("sprints", [])}
+
+
+def sprint_display_name(number: int, sprint_by_number: dict[int, dict]) -> str:
+    sprint = sprint_by_number.get(number)
+    return sprint["name"] if sprint else f"Спринт {number}"
+
+
+def aggregate_sprint_names(ids: list[str], task_sprint: dict, sprint_by_number: dict[int, dict]) -> str:
+    numbers = sorted({task_sprint[i] for i in ids if i in task_sprint})
+    if not numbers:
         return "—"
-    if len(sprints) == 1:
-        return str(sprints[0])
-    return f"{sprints[0]}–{sprints[-1]}"
+    if len(numbers) == 1:
+        return sprint_display_name(numbers[0], sprint_by_number)
+    lo_match = SPRINT_NAME_DATE_RE.search(sprint_display_name(numbers[0], sprint_by_number))
+    hi_match = SPRINT_NAME_DATE_RE.search(sprint_display_name(numbers[-1], sprint_by_number))
+    if lo_match and hi_match:
+        return f"Спринты {numbers[0]}–{numbers[-1]} ({lo_match.group(1)}–{hi_match.group(2)})"
+    return f"Спринты {numbers[0]}–{numbers[-1]}"
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +218,7 @@ def render_header(plan: dict) -> str:
 
 def render_plan_table(plan: dict, id_to_name: dict[str, str], integration_ids: set[str]) -> str:
     task_sprint = plan.get("sprint_plan", {}).get("task_sprint", {})
+    sprint_by_number = build_sprint_by_number(plan)
     lines = ["## План по этапам", ""]
     for m in plan.get("milestones", []):
         lines.append(f"### {m['id']} — {m['name']}")
@@ -214,14 +235,15 @@ def render_plan_table(plan: dict, id_to_name: dict[str, str], integration_ids: s
                     if placeholder_emitted:
                         continue  # уже одна строка-плейсхолдер на всю WBS
                     ids = [x["id"] for x in wbs_integration_tasks]
-                    sprint = aggregate_sprints(ids, task_sprint)
+                    sprint = aggregate_sprint_names(ids, task_sprint, sprint_by_number)
                     # depends_on у всех сгенерированных интеграций одинаковый
                     # (T-6.4.1) -- берём из первой, схлопывать нечего.
                     deps = human_refs(wbs_integration_tasks[0].get("depends_on") or [], id_to_name)
                     lines.append(f"| {INTEGRATION_PLACEHOLDER} | {sprint} | {deps} |")
                     placeholder_emitted = True
                     continue
-                sprint = task_sprint.get(t["id"], "—")
+                task_sprint_number = task_sprint.get(t["id"])
+                sprint = sprint_display_name(task_sprint_number, sprint_by_number) if task_sprint_number else "—"
                 deps = human_refs(t.get("depends_on") or [], id_to_name)
                 lines.append(f"| {t['name']} | {sprint} | {deps} |")
             lines.append("")
@@ -401,6 +423,25 @@ def run_selftest() -> None:
     bare_id_in_table = re.search(r"\| T-\d", doc)
     assert not bare_id_in_table, "в таблице плана встречается голый T-ID вместо названия"
     print("[selftest] зависимости в таблице показаны названиями, не ID -- OK")
+
+    # Таблица плана показывает name спринта ("Спринт N (start-end[, метка])"),
+    # а не голый номер -- в т.ч. в строке-плейсхолдере интеграций.
+    plan_table = render_plan_table(plan, build_id_to_name(plan, collapse_ids=int_ids), int_ids)
+    bare_sprint_cell = re.search(r"\| \d+ \|", plan_table)
+    assert not bare_sprint_cell, f"в таблице плана встречается голый номер спринта: {bare_sprint_cell}"
+    assert re.search(r"Спринт \d+ \(\d{4}-\d{2}-\d{2}–\d{4}-\d{2}-\d{2}", plan_table), (
+        "в таблице плана не найден развёрнутый Спринт N (дата начала-дата конца)"
+    )
+    hypercare_wbs_name = next(
+        wbs["name"]
+        for m in plan["milestones"]
+        for wbs in m["wbs"]
+        if wbs["id"] == "WBS-9.3"
+    )
+    assert f", {hypercare_wbs_name})" in plan_table, (
+        f"метка WBS-9.3 ({hypercare_wbs_name!r}) не найдена в имени спринта гиперподдержки в таблице"
+    )
+    print("[selftest] таблица плана показывает name спринта (дата + метка гиперподдержки), а не номер -- OK")
 
     # Риски -- только реально сработавшие, без source/condition-полей.
     risk_count_in_plan = len(plan.get("risks") or [])
