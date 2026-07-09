@@ -244,14 +244,59 @@ Project Methodology` и `added_by: client_approval_process`.
 `agent/examples/client-abc.merged-plan.validation-report.txt`.
 
 ## Этап 8 — Jira-экспорт
-**Статус: не начато.**
+**Статус: готово.** Артефакт: `agent/jira_export.py` (+ `agent/examples/`).
 
-Маппинг: Milestone → Epic, Task ID → Issue, WBS → Label/Component,
-`interview_checklist`/`verification_checklist` → описание задачи в Jira.
-Отдельный шаг, срабатывающий только по явному подтверждению утверждённого
-плана человеком — не выполняется автоматически вместе со сборкой пакета
-(Этап 6). На вход берётся результат слияния правок (Этап 7.6), а не
-исходный JSON Этапа 6.
+Экспорт в уже существующий Jira-проект (проект не создаётся этим
+скриптом). На вход берётся результат Этапа 7.6 (`merge-corrections.py`) —
+смерженный и провалидированный план, не исходный JSON Этапа 6. Весь план
+становится одним Epic в этом проекте, не набором Epic по Milestone:
+
+| Наш уровень | Jira |
+|---|---|
+| Весь план | 1 Epic (`summary` = `charter.project_name`, `description` = цель/даты/заказчик + Риски + Deliverables) |
+| Milestone (M1–M9) | Label на каждой Issue/Subtask (`M3`, `M6` и т.п.) |
+| WBS | Issue, child Epic — `summary` = название WBS |
+| Task (наш) | Subtask под соответствующим WBS-Issue — `summary` = название Task, `description` = Interview/Verification checklist, спринт = имя из `sprint_plan.task_sprint`/`sprint_plan.sprints[].name` (Этап 5/6) |
+| `depends_on`/`used_by` | Issue Link `Blocks` (`outward` "blocks" / `inward` "is blocked by"); `used_by` создаёт связь только там, где она не дублирует уже покрытую `depends_on`-парой — `used_by` вторичен по построению (см. `sprint-mapping-rules.md`) и иногда указывает на WBS, а не Task |
+| Риски (сработавшие) | Секция текста в `description` Epic, не отдельные issue — переиспользует `render_risks()` из Этапа 7.5 целиком (включая уже применённый `clean_business_text()`, логика очистки не дублируется) |
+| Deliverables | Секция текста в `description` Epic по каждому Milestone — переиспользует `render_deliverables()` из Этапа 7.5 |
+
+Обязательное предусловие перед построением маппинга: скрипт запрашивает у
+целевого проекта реальные issuetypes (`GET /rest/api/3/project/{key}`) и
+подтверждает, что Subtask доступен на уровне схемы проекта. Если Subtask
+недоступен (team-managed проект без Subtask) — скрипт не выбирает
+обходной путь молча, а останавливается явной ошибкой с объяснением;
+плоская структура (WBS и Task — оба Issue, связаны Issue Link, по
+умолчанию `Relates`) включается только по явному `--allow-flat-fallback`.
+
+Явное подтверждение перед созданием issues — отдельный шаг, не
+происходящий автоматически вместе со сборкой пакета: по умолчанию скрипт
+работает в dry-run (только `GET`-запросы схемы проекта + печать того, что
+было бы создано, без единого `POST`); реальное создание — только по
+`--execute` вместе с `--confirm` (или интерактивным подтверждением с
+итоговыми числами в терминале).
+
+Известное ограничение (v1): нативное поле Jira Sprint принимает не текст,
+а ID уже существующего Sprint на Scrum-доске — создание/сопоставление
+реальных Sprint через Agile REST API за рамками этого скрипта. Имя
+спринта поэтому пишется первой строкой `description` Issue/Subtask, а не
+в найденный `customfield_...` — это показывается в dry-run отчёте как
+известное решение, а не скрывается.
+
+`--selftest` полностью офлайн (`FakeJiraClient` + фикстуры схемы
+проекта, без сетевых вызовов): маппинг WBS→Issue/Task→Subtask на
+`client-abc.merged-plan.json`, labels = Milestone ID, Sprint = имя (в т.ч.
+метка "Гиперподдержка"), остановка без Subtask и явный флаг
+`--allow-flat-fallback` для плоского режима, dry-run/`--execute` дают
+одинаковые счётчики, известная разорванная ссылка `T-4.2.1.used_by →
+T-4.2.2` (следствие демо-исключения в Этапе 7.6) видна в
+`skipped_links`, а не теряется молча, и гейт подтверждения перед
+`--execute` (`--confirm` / интерактивный ввод / отказ).
+
+Пример прогона: `agent/examples/jira-project-schema.example.json` —
+офлайн-фикстура схемы company-managed проекта (заменяет живой Jira-проект,
+которого нет в этом репозитории), `agent/examples/client-abc.jira-export.dryrun.log.txt`
+— dry-run на `client-abc.merged-plan.json`.
 
 ---
 Изменения в этом плане (новые этапы, переформулировка существующих) фиксируются

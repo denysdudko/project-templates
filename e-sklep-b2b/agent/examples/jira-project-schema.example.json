@@ -1,0 +1,17 @@
+{
+  "_comment": "Офлайн-фикстура схемы целевого Jira-проекта -- заменяет живые GET /rest/api/3/project/{key} и GET /rest/api/3/field для демо/тестов jira_export.py (Этап 8), т.к. в этом репозитории нет подключённого реального Jira-проекта. Представляет типичный company-managed проект (Subtask доступен). В реальном запуске оба списка приходят из Jira API, не из файла.",
+  "issueTypes": [
+    { "id": "10001", "name": "Task", "subtask": false },
+    { "id": "10002", "name": "Epic", "subtask": false },
+    { "id": "10003", "name": "Sub-task", "subtask": true },
+    { "id": "10004", "name": "Bug", "subtask": false },
+    { "id": "10005", "name": "Story", "subtask": false }
+  ],
+  "fields": [
+    { "id": "customfield_10020", "name": "Sprint" },
+    { "id": "customfield_10014", "name": "Epic Link" },
+    { "id": "customfield_10011", "name": "Epic Name" },
+    { "id": "summary", "name": "Summary" },
+    { "id": "description", "name": "Description" }
+  ]
+}
