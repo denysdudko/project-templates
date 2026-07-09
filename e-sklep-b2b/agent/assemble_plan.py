@@ -28,7 +28,7 @@ import heapq
 import json
 import math
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,7 @@ REMEDIATION_BUFFER_HOURS = 0.2 * CAPACITY_PER_SPRINT_HOURS  # 16
 
 LAUNCH_TASK_ID = "T-9.2.2"  # WBS-9.2, "запуск в эксплуатацию" (fit-check gate)
 SUPPORT_MONITORING_TASK_ID = "T-9.3.2"  # исключена из обычного bin-packing
+HYPERCARE_WBS_ID = "WBS-9.3"  # для подписи спринта, зарезервированного под T-9.3.2
 
 # Task, для которых keyword-эвристика Этапа 3 не даёт совпадения, но
 # правильный тип однозначно следует из description самой Task (а не
@@ -177,6 +178,14 @@ def load_template() -> tuple[dict, dict[str, dict]]:
         mid = f"M{i}"
         tasks_by_milestone[mid] = load_yaml(TEMPLATE_ROOT / "tasks" / f"{mid}_tasks.yaml")
     return schema, tasks_by_milestone
+
+
+def find_wbs_name(template_schema: dict, wbs_id: str) -> str:
+    for m in template_schema["milestones"]:
+        for wbs in m["wbs"]:
+            if wbs["id"] == wbs_id:
+                return wbs["name"]
+    raise KeyError(f"WBS {wbs_id!r} не найден в schema/milestones_wbs.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +446,27 @@ def topological_order(task_ids: list[str], depends_on: dict[str, list[str]]) -> 
     return result
 
 
+# ---------------------------------------------------------------------------
+# Именование спринтов -- вычисляется из start_date + sprint_length_weeks,
+# без нового поля во входной схеме (agent/sprint-mapping-rules.md,
+# раздел "Именование спринтов").
+# ---------------------------------------------------------------------------
+
+
+def sprint_date_range(sprint_number: int, start_date: date) -> tuple[date, date]:
+    sprint_start = start_date + timedelta(weeks=(sprint_number - 1) * SPRINT_LENGTH_WEEKS)
+    sprint_end = sprint_start + timedelta(weeks=SPRINT_LENGTH_WEEKS) - timedelta(days=1)
+    return sprint_start, sprint_end
+
+
+def sprint_name(sprint_number: int, start_date: date, label: str | None = None) -> str:
+    s, e = sprint_date_range(sprint_number, start_date)
+    base = f"Спринт {sprint_number} ({s.isoformat()}–{e.isoformat()})"
+    if label:
+        return f"Спринт {sprint_number} ({s.isoformat()}–{e.isoformat()}, {label})"
+    return base
+
+
 class SprintBook:
     """Учёт занятой трудоёмкости по спринтам для жадного распределения."""
 
@@ -473,6 +503,7 @@ def build_sprint_plan(
     effort: dict[str, dict],
     start_date: date,
     target_launch_date: date,
+    hypercare_label: str,
 ) -> dict:
     template_order = [t["id"] for t in all_tasks]
 
@@ -522,6 +553,23 @@ def build_sprint_plan(
             book.reserve_exclusive(SUPPORT_MONITORING_TASK_ID, support_sprint, effort[SUPPORT_MONITORING_TASK_ID])
             task_sprint[SUPPORT_MONITORING_TASK_ID] = support_sprint
             floor_sprint = max(floor_sprint, support_sprint + 1)
+
+    # Именование спринтов -- Спринт {N} (дата начала-дата конца), вычислено из
+    # start_date, без нового поля во входной схеме. "Хвостовой" спринт,
+    # зарезервированный целиком под T-9.3.2 (reserve_exclusive), получает в
+    # скобках метку WBS-9.3 (`hypercare_label`, "Гиперподдержка" в шаблоне
+    # v1) -- это единственный случай, когда весь спринт однозначно
+    # принадлежит одной содержательной работе. T-7.3.1 (`remediation`)
+    # делит спринт с обычными Task на общих основаниях (bin-packing, не
+    # эксклюзивная резервация) -- подписывать такой спринт целиком как
+    # "устранение замечаний" было бы неточно, поэтому он не помечается.
+    for sprint_obj in book.sprints:
+        label = (
+            hypercare_label
+            if any(r["task_id"] == SUPPORT_MONITORING_TASK_ID for r in sprint_obj.get("reserved") or [])
+            else None
+        )
+        sprint_obj["name"] = sprint_name(sprint_obj["sprint"], start_date, label)
 
     available_sprints = math.ceil(
         (target_launch_date - start_date).days / (SPRINT_LENGTH_WEEKS * 7)
@@ -682,6 +730,7 @@ def assemble_plan(input_data: dict, llm_client=None) -> dict:
         effort,
         parse_date(input_data["start_date"]),
         parse_date(input_data["target_launch_date"]),
+        find_wbs_name(template_schema, HYPERCARE_WBS_ID),
     )
 
     risk_ctx = {
@@ -821,6 +870,27 @@ def run_selftest() -> None:
         f"[selftest] Тесный срок: total_sprints_used={tsp['total_sprints_used']}, "
         f"available_sprints={tsp['available_sprints']}, R-7 в risks -- OK"
     )
+
+    # Именование спринтов -- "Спринт {N} (start–end)", дата начала считается
+    # от start_date шаблона; "хвостовой" спринт, зарезервированный под
+    # T-9.3.2 (support_monitoring), несёт метку WBS-9.3 ("Гиперподдержка") в
+    # скобках, остальные спринты -- без метки.
+    import re as _re
+
+    sprint_name_re = _re.compile(r"^Спринт \d+ \(\d{4}-\d{2}-\d{2}–\d{4}-\d{2}-\d{2}(, .+)?\)$")
+    assert tsp["sprints"], "в tight_plan нет ни одного спринта -- ветка не проверена"
+    for s in tsp["sprints"]:
+        assert sprint_name_re.match(s["name"]), f"неожиданный формат имени спринта: {s['name']!r}"
+    first = tsp["sprints"][0]
+    assert first["name"] == f"Спринт 1 ({tight_input['start_date']}–2026-08-16)", first["name"]
+    hypercare_sprints = [
+        s for s in tsp["sprints"] if any(r["task_id"] == SUPPORT_MONITORING_TASK_ID for r in s.get("reserved") or [])
+    ]
+    assert len(hypercare_sprints) == 1, hypercare_sprints
+    assert hypercare_sprints[0]["name"].endswith(", Гиперподдержка)"), hypercare_sprints[0]["name"]
+    non_hypercare = [s for s in tsp["sprints"] if s not in hypercare_sprints]
+    assert all(", " not in s["name"] for s in non_hypercare), "обычный спринт не должен нести метку в скобках"
+    print(f"[selftest] Именование спринтов: {first['name']!r}, гиперподдержка -- {hypercare_sprints[0]['name']!r} -- OK")
 
     # Контракт LLM-слоя: если llm_client меняет структуру -- adapt_wording_with_llm
     # обязан отклонить результат, а не молча принять.
