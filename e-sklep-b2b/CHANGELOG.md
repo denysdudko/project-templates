@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.28 — Jira-экспорт: привязка к Sprint невозможна для Subtask — явная остановка
+- Найдено на реальном `--execute --create-sprints` против TPT (первая попытка после v1.27): лог показывал "Привязано к Sprint N: NN issue" для всех 87 задач, но проверка через `GET /rest/agile/1.0/sprint/{id}/issue` показала **0 реально привязанных** во всех 6 Sprint. Причина — Jira Sub-task не хранит поле Sprint независимо от родителя: `POST /rest/agile/1.0/sprint/{id}/issue` для ключа Subtask возвращает `204 OK`, но тихо ничего не делает (`customfield` Sprint остаётся `null` даже сразу после вызова). Тот же вызов на обычном Issue (WBS-уровня, `Zadanie`) сработал мгновенно и корректно — это подтверждает архитектурное ограничение Jira, не баг в коде.
+- Проверено дополнительно: привязка к родительскому WBS-Issue вместо Task была бы неточной — 7 из 39 WBS в `client-abc` содержат Task, распределённые по нескольким спринтам (например, `WBS-9.3`: спринты 4/5/6), такая замена ошибочно приписала бы им один спринт.
+- Добавлена `require_sprint_linking_possible()` + `SprintLinkingUnavailableError` (по аналогии с `SubtaskUnavailableError`): `--create-sprints` в стандартном Subtask-режиме теперь останавливается явной ошибкой **до** любых GET/POST к доске — не создаёт Sprint и не делает вид, что привязка удалась. Работает только с `--allow-flat-fallback` (Task экспортируются как Issue, не Subtask) — там нативное поле Sprint устанавливается корректно.
+- `--selftest`: `require_sprint_linking_possible(flat_fallback=False)` — останавливается явной ошибкой; `flat_fallback=True` — пропускается без ошибки.
+- Диагностический побочный эффект (тестовая привязка `WBS-1.1` к Sprint 1 при проверке гипотезы) обнаружен и отменён (`POST /rest/agile/1.0/backlog/issue`) сразу после подтверждения находки.
+- `link_issues_to_sprints()`/`chunked()`/`build_sprint_task_ids()` (v1.27) не удалялись — остаются рабочими для плоского режима, где Task = Issue.
+- `docs/principles.md`, `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
+## v1.27 — Jira-экспорт: реальная привязка Issue/Subtask к Sprint (--create-sprints)
+- После `--execute --create-sprints`: реальные ключи Issue/Subtask (по `sprint_plan.task_sprint`) привязываются к реально созданным Sprint через `POST /rest/agile/1.0/sprint/{id}/issue`, пакетами по `MAX_ISSUES_PER_SPRINT_LINK_BATCH = 50` (лимит Jira Agile API). Раньше (v1.22) привязка сознательно не делалась — имя спринта оставалось только текстом в description; теперь нативное поле Jira Sprint проставляется напрямую, текст в description остаётся как было (дублирует, не заменяет).
+- Новая функция `link_issues_to_sprints()` (вызывается после создания и issues, и sprints) и `JiraClient.add_issues_to_sprint()`/`FakeJiraClient.add_issues_to_sprint()`. В отличие от `create_issue`/`create_issue_link`, эта операция идемпотентна на стороне Jira — повторная привязка уже привязанного issue не создаёт дубль.
+- Task, для которых в `sprint_task_ids` есть номер спринта, но issue не был создан (нет ключа в `key_by_placeholder`), не привязываются молча — печатается явно, тем же паттерном, что `skipped_links`.
+- Dry-run (`format_sprint_dry_run_report`) показывает превью привязки — сколько задач и батчей на каждый Sprint, без единого POST.
+- `--selftest`: `build_sprint_task_ids()` покрывает все Task плана; `chunked()` режет на батчи без потерь/дублей (синтетический кейс >100 элементов); `link_issues_to_sprints()` через `FakeJiraClient` — issue без ключа пропускается явно, не молча.
+- Проверено на живом TPT: dry-run показывает корректное распределение (87 задач по 6 спринтам, без потерь).
+- Маппинг Epic/Issue/Subtask/Link, создание Sprint (`create_sprint`) не менялись — это отдельный шаг поверх них.
+- `docs/principles.md`, `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.26 — Параметры сетки спринтов вынесены в agent/estimation-config.yaml (Этап 5)
 - Добавлен `agent/estimation-config.yaml` — `sprint_duration_weeks` (по умолчанию 2) и `team_capacity_per_sprint` (по умолчанию 80 часов). Генерация сетки спринтов и жадное распределение задач (топологическая сортировка по `depends_on`, размещение с учётом capacity — `agent/sprint-mapping-rules.md`, Этап 5) уже были реализованы в `assemble_plan.py` и работали; этой правкой константы `SPRINT_LENGTH_WEEKS`/`CAPACITY_PER_SPRINT_HOURS` (были захардкожены в коде) стали конфигурируемыми без изменения `assemble_plan.py`.
 - `load_estimation_config()` читает YAML при импорте модуля; значения по умолчанию (2 недели, 80 часов) совпадают с прежними константами — регенерация `client-abc.plan.json` побайтово идентична предыдущей.
