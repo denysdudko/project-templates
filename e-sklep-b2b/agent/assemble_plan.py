@@ -38,13 +38,22 @@ AGENT_DIR = Path(__file__).resolve().parent
 TEMPLATE_ROOT = AGENT_DIR.parent
 
 # ---------------------------------------------------------------------------
-# Константы v1 (agent/sprint-mapping-rules.md, раздел "Константы v1")
+# Параметры сетки спринтов (agent/estimation-config.yaml) -- раньше были
+# захардкожены здесь как константы v1 (agent/sprint-mapping-rules.md,
+# раздел "Константы v1"), теперь конфигурируются без изменения кода.
 # ---------------------------------------------------------------------------
 
-SPRINT_LENGTH_WEEKS = 2
-HOURS_PER_WORKING_DAY = 8
-CAPACITY_PER_SPRINT_HOURS = SPRINT_LENGTH_WEEKS * 5 * HOURS_PER_WORKING_DAY  # 80
-REMEDIATION_BUFFER_HOURS = 0.2 * CAPACITY_PER_SPRINT_HOURS  # 16
+
+def load_estimation_config(path: Path | None = None) -> dict:
+    path = path or AGENT_DIR / "estimation-config.yaml"
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+_ESTIMATION_CONFIG = load_estimation_config()
+SPRINT_LENGTH_WEEKS = _ESTIMATION_CONFIG["sprint_duration_weeks"]
+CAPACITY_PER_SPRINT_HOURS = _ESTIMATION_CONFIG["team_capacity_per_sprint"]
+REMEDIATION_BUFFER_HOURS = 0.2 * CAPACITY_PER_SPRINT_HOURS  # 16 при значениях по умолчанию
 
 LAUNCH_TASK_ID = "T-9.2.2"  # WBS-9.2, "запуск в эксплуатацию" (fit-check gate)
 SUPPORT_MONITORING_TASK_ID = "T-9.3.2"  # исключена из обычного bin-packing

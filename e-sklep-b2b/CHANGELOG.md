@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.26 — Параметры сетки спринтов вынесены в agent/estimation-config.yaml (Этап 5)
+- Добавлен `agent/estimation-config.yaml` — `sprint_duration_weeks` (по умолчанию 2) и `team_capacity_per_sprint` (по умолчанию 80 часов). Генерация сетки спринтов и жадное распределение задач (топологическая сортировка по `depends_on`, размещение с учётом capacity — `agent/sprint-mapping-rules.md`, Этап 5) уже были реализованы в `assemble_plan.py` и работали; этой правкой константы `SPRINT_LENGTH_WEEKS`/`CAPACITY_PER_SPRINT_HOURS` (были захардкожены в коде) стали конфигурируемыми без изменения `assemble_plan.py`.
+- `load_estimation_config()` читает YAML при импорте модуля; значения по умолчанию (2 недели, 80 часов) совпадают с прежними константами — регенерация `client-abc.plan.json` побайтово идентична предыдущей.
+- `HOURS_PER_WORKING_DAY` (промежуточная константа для вычисления capacity) убрана — `team_capacity_per_sprint` теперь прямое значение в часах, не производное от рабочих часов в день; нигде больше не использовалась. `REMEDIATION_BUFFER_HOURS = 0.2 * capacity` остаётся константой в коде (не вынесена в конфиг — этого не просили).
+- `agent/sprint-mapping-rules.md`, раздел "Константы v1" — обновлён: значения по умолчанию читаются из `estimation-config.yaml`, а не захардкожены в `assemble_plan.py`; расширение до per-клиентской конфигурации через `input-schema.json` по-прежнему предложение для v2, не вводится этой правкой.
+- WBS-9.3/WBS-9.4 (гиперподдержка/завершение) по-прежнему не входят в `fits_in_target_launch_date`-проверку и в R-7 — не менялось, уже было реализовано (v1.7/v1.8).
+- `assemble_plan.py --selftest` и `jira_export.py --selftest` проходят целиком.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись (только читаются, как и раньше).
+
 ## v1.25 — Jira-экспорт: originalEstimate в целых h/m (Jira не принимает дробные единицы)
 - Найдено на реальном `--execute` против TPT (первый прогон с timetracking из v1.22): Epic + 39 WBS-Issue создались чисто, но первая же Subtask (T-1.1.1, `effort_hours=1.5`) упала — `HTTP 400: {"timetracking":"Określ prawidłową wartość dla rejestrowania czasu"}` ("Specify a valid value for time tracking"). Причина: Jira `timetracking.originalEstimate` — "pretty duration" (`"1h 30m"`), не принимает дробные единицы вроде `"1.5h"`, которые писал `f"{hours}h"`.
 - Добавлена `hours_to_jira_duration()` — раскладывает дробные часы на целые `h`+`m` (округление до минуты): `1.5 → "1h 30m"`, `0.75 → "45m"`, `10.0 → "10h"`. `_timetracking_fields()` и dry-run отчёт используют её вместо голого `f"{hours}h"`.
