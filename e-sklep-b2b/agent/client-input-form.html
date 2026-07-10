@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Comarch e-Sklep B2B — форма входных данных</title>
+<style>
+  :root {
+    --bg: #f6f5f3;
+    --panel: #ffffff;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+    --line: #dedad3;
+    --accent: #2a5a4a;
+    --accent-soft: #e8efec;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    padding: 32px 20px 80px;
+  }
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 860px) {
+    .wrap { grid-template-columns: 1fr; }
+  }
+  header.page {
+    max-width: 980px;
+    margin: 0 auto 24px;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 0;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 24px;
+  }
+  .section {
+    margin-bottom: 22px;
+  }
+  .section:last-child { margin-bottom: 0; }
+  .section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 5px;
+    margin-top: 14px;
+  }
+  label:first-of-type { margin-top: 0; }
+  .req::after {
+    content: " *";
+    color: #b3543f;
+  }
+  input[type=text], input[type=number], input[type=date], select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: var(--sans);
+    background: #fff;
+    color: var(--ink);
+  }
+  input:focus, select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .fixed-value {
+    padding: 8px 10px;
+    background: var(--accent-soft);
+    border-radius: 6px;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .checks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .check-row input { margin-top: 2px; }
+  .tag-input-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .tag-input-row input { flex: 1; }
+  button.add-btn {
+    border: 1px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 0 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 4px 6px 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+  }
+  .tag button {
+    border: none;
+    background: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px;
+  }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .sticky {
+    position: sticky;
+    top: 20px;
+  }
+  .json-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .json-head .section-label { margin: 0; }
+  .status {
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .status.ok { background: #e4f0e8; color: var(--accent); }
+  .status.err { background: #f7e6e2; color: #a4402b; }
+  pre#output {
+    background: #1c1c1c;
+    color: #e9e6df;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    max-height: 480px;
+    overflow-y: auto;
+    margin: 0;
+  }
+  .missing-list {
+    font-size: 12px;
+    color: #a4402b;
+    margin: 10px 0 0;
+    padding-left: 18px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .actions button {
+    flex: 1;
+    padding: 9px 0;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .actions button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .copied-msg {
+    font-size: 12px;
+    color: var(--accent);
+    margin-top: 8px;
+    height: 14px;
+  }
+</style>
+</head>
+<body>
+
+<header class="page">
+  <h1>Входные данные проекта — Comarch e-Sklep B2B</h1>
+  <p class="sub">Заполняется консультантом на старте проекта. Результат — JSON по <code>agent/input-schema.json</code>, готовый для <code>assemble_plan.py --input</code>.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+
+    <div class="section">
+      <div class="section-label">Проект</div>
+
+      <label class="req" for="project_name">Название проекта</label>
+      <input type="text" id="project_name" placeholder="Внедрение Comarch e-Sklep B2B для клиента ABC">
+
+      <label class="req" for="client">Заказчик</label>
+      <input type="text" id="client" placeholder="ABC sp. z o.o.">
+    </div>
+
+    <div class="section">
+      <div class="section-label">ERP</div>
+
+      <label class="req">Система</label>
+      <div class="fixed-value">Comarch ERP Optima</div>
+      <p class="hint">Шаблон v1 покрывает только Optima — поле не редактируется.</p>
+
+      <label for="erp_version">Версия ERP (если известна)</label>
+      <input type="text" id="erp_version" placeholder="напр. 2026.5">
+    </div>
+
+    <div class="section">
+      <div class="section-label">Масштаб</div>
+
+      <label class="req" for="users_count">Количество пользователей</label>
+      <input type="number" id="users_count" min="1" placeholder="напр. 25">
+    </div>
+
+    <div class="section">
+      <div class="section-label">Интеграции</div>
+      <label>Список интеграций</label>
+      <div class="tag-input-row">
+        <input type="text" id="integration_input" placeholder="напр. Baselinker">
+        <button class="add-btn" type="button" onclick="addTag('integration')">Добавить</button>
+      </div>
+      <div class="tags" id="integrations_tags"></div>
+      <p class="hint">Каждая интеграция — отдельный client-specific stub поверх WBS-6.4.</p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Особенности проекта</div>
+      <div class="checks">
+        <label class="check-row"><input type="checkbox" value="individual_prices" class="feature-cb"> Индивидуальные цены</label>
+        <label class="check-row"><input type="checkbox" value="credit_limits" class="feature-cb"> Кредитные лимиты</label>
+        <label class="check-row"><input type="checkbox" value="multiple_warehouses" class="feature-cb"> Несколько складов</label>
+      </div>
+      <p class="hint">Список ограничен тем, что покрыто шаблоном (WBS-6.2, WBS-6.3, M2/Zasoby).</p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Сроки</div>
+      <div class="two-col">
+        <div>
+          <label class="req" for="start_date">Дата начала</label>
+          <input type="date" id="start_date">
+        </div>
+        <div>
+          <label class="req" for="target_launch_date">Желаемая дата запуска</label>
+          <input type="date" id="target_launch_date">
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="card sticky">
+    <div class="json-head">
+      <div class="section-label">JSON (input-schema.json)</div>
+      <span class="status" id="status">заполните обязательные поля</span>
+    </div>
+    <pre id="output">{}</pre>
+    <ul class="missing-list" id="missing"></ul>
+    <div class="actions">
+      <button type="button" onclick="copyJson()">Копировать</button>
+      <button type="button" class="primary" id="downloadBtn" onclick="downloadJson()">Скачать .json</button>
+    </div>
+    <div class="copied-msg" id="copiedMsg"></div>
+  </div>
+
+</div>
+
+<script>
+let integrations = [];
+
+function addTag(kind) {
+  const input = document.getElementById(kind + '_input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (kind === 'integration') integrations.push(val);
+  input.value = '';
+  renderTags();
+  buildJson();
+}
+
+function removeTag(kind, idx) {
+  if (kind === 'integration') integrations.splice(idx, 1);
+  renderTags();
+  buildJson();
+}
+
+function renderTags() {
+  const box = document.getElementById('integrations_tags');
+  box.innerHTML = integrations.map((v, i) =>
+    `<span class="tag">${escapeHtml(v)}<button type="button" onclick="removeTag('integration', ${i})">×</button></span>`
+  ).join('');
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('integration_input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); addTag('integration'); }
+});
+
+function collectFeatures() {
+  return Array.from(document.querySelectorAll('.feature-cb:checked')).map(cb => cb.value);
+}
+
+function buildJson() {
+  const project_name = document.getElementById('project_name').value.trim();
+  const client = document.getElementById('client').value.trim();
+  const erp_version = document.getElementById('erp_version').value.trim();
+  const users_count = document.getElementById('users_count').value;
+  const start_date = document.getElementById('start_date').value;
+  const target_launch_date = document.getElementById('target_launch_date').value;
+  const features = collectFeatures();
+
+  const data = {
+    project_name: project_name || undefined,
+    client: client || undefined,
+    erp: { system: "Comarch ERP Optima" },
+    users_count: users_count ? Number(users_count) : undefined,
+    integrations: integrations,
+    features: features,
+    start_date: start_date || undefined,
+    target_launch_date: target_launch_date || undefined
+  };
+  if (erp_version) data.erp.version = erp_version;
+
+  const missing = [];
+  if (!project_name) missing.push('Название проекта');
+  if (!client) missing.push('Заказчик');
+  if (!users_count) missing.push('Количество пользователей');
+  if (!start_date) missing.push('Дата начала');
+  if (!target_launch_date) missing.push('Желаемая дата запуска');
+
+  const cleaned = JSON.parse(JSON.stringify(data, (k, v) => v === undefined ? null : v));
+  Object.keys(cleaned).forEach(k => { if (cleaned[k] === null) delete cleaned[k]; });
+
+  document.getElementById('output').textContent = JSON.stringify(cleaned, null, 2);
+
+  const statusEl = document.getElementById('status');
+  const missingEl = document.getElementById('missing');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  if (missing.length === 0) {
+    statusEl.textContent = 'готово';
+    statusEl.className = 'status ok';
+    missingEl.innerHTML = '';
+    downloadBtn.disabled = false;
+  } else {
+    statusEl.textContent = 'не хватает полей';
+    statusEl.className = 'status err';
+    missingEl.innerHTML = missing.map(m => `<li>${escapeHtml(m)}</li>`).join('');
+    downloadBtn.disabled = true;
+  }
+}
+
+function copyJson() {
+  const text = document.getElementById('output').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const msg = document.getElementById('copiedMsg');
+    msg.textContent = 'Скопировано в буфер обмена';
+    setTimeout(() => msg.textContent = '', 2000);
+  });
+}
+
+function downloadJson() {
+  const text = document.getElementById('output').textContent;
+  const clientVal = document.getElementById('client').value.trim() || 'client';
+  const slug = clientVal.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slug}.input.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.querySelectorAll('input, select').forEach(el => {
+  el.addEventListener('input', buildJson);
+  el.addEventListener('change', buildJson);
+});
+
+buildJson();
+</script>
+
+</body>
+</html>
