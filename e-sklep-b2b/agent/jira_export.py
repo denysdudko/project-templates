@@ -79,7 +79,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -117,6 +119,12 @@ class JiraApiError(RuntimeError):
 class SubtaskUnavailableError(RuntimeError):
     """Целевой проект не предоставляет issuetype Subtask на уровне схемы,
     и --allow-flat-fallback не передан -- решение явно за человеком."""
+
+
+class BoardUnavailableError(RuntimeError):
+    """--create-sprints: у проекта нет доски или ни одна не Scrum (не
+    поддерживает спринты) -- скрипт не создаёт доску самостоятельно,
+    решение явно за человеком (по аналогии с SubtaskUnavailableError)."""
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +202,42 @@ def require_subtask_or_flat_confirmation(schema: ProjectSchema, allow_flat_fallb
         "молча. Вопрос консультанту: использовать плоскую структуру вместо Subtask (WBS и Task "
         "-- оба Issue, связаны Issue Link relates to/is child of)? Если да -- повторите запуск "
         "с флагом --allow-flat-fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Доска с включёнными Sprint для --create-sprints -- обязательное
+# предусловие перед созданием Sprint, по аналогии с
+# require_subtask_or_flat_confirmation выше.
+# ---------------------------------------------------------------------------
+
+
+def require_sprint_capable_board(client, board_candidates: list[dict], project_key: str) -> dict:
+    """Возвращает первую доску проекта, реально поддерживающую Sprint.
+
+    Поле `type` из GET /rest/agile/1.0/board ненадёжно для этой проверки --
+    team-managed проекты нередко репортят доску как "simple", даже когда
+    Sprints у них включены (обнаружено на живом проекте TPT: type='simple',
+    но GET .../board/{id}/sprint успешен и там уже есть спринт). Настоящая
+    проверка -- реальный вызов client.board_supports_sprints(), а не чтение
+    статичного поля схемы.
+
+    Если досок нет или ни одна не поддерживает Sprint -- не включает функцию
+    самостоятельно, а поднимает BoardUnavailableError с объяснением
+    (--create-sprints не выполняется молча в обход)."""
+    if not board_candidates:
+        raise BoardUnavailableError(
+            f"У проекта {project_key} не найдено ни одной доски (GET /rest/agile/1.0/board) -- "
+            "--create-sprints требует существующую доску с включённым Sprint, скрипт её не создаёт."
+        )
+    for board in board_candidates:
+        if client.board_supports_sprints(board["id"]):
+            return board
+    checked_types = ", ".join(sorted({(b.get("type") or "?") for b in board_candidates}))
+    raise BoardUnavailableError(
+        f"У проекта {project_key} есть доска(и) (типы: {checked_types}), но ни одна не поддерживает "
+        "Sprint (GET /rest/agile/1.0/board/{id}/sprint отклонён как 'does not support sprints') -- "
+        "--create-sprints требует доску с включённой функцией Sprint, скрипт её не включает."
     )
 
 
@@ -295,17 +339,55 @@ class JiraClient:
             },
         )
 
+    # --- --create-sprints (opt-in) -- Agile REST API, тот же retry из _request() ---
+
+    def get_board_candidates(self) -> list[dict]:
+        data = self._request("GET", f"/rest/agile/1.0/board?projectKeyOrId={self.project_key}")
+        return data.get("values", [])
+
+    def board_supports_sprints(self, board_id: int) -> bool:
+        """Поле `type` доски ненадёжно (см. require_sprint_capable_board) --
+        реальная проверка -- вызов списка спринтов доски; retry на
+        transient-ошибках уже покрыт _request()."""
+        try:
+            self._request("GET", f"/rest/agile/1.0/board/{board_id}/sprint")
+            return True
+        except JiraApiError as exc:
+            if "does not support sprints" in str(exc).lower():
+                return False
+            raise
+
+    def create_sprint(
+        self, board_id: int, name: str, start_date_iso: str, end_date_iso: str, goal: str | None = None
+    ) -> dict:
+        """Тот же риск дубля при retry после обрыва соединения, что и в
+        create_issue выше -- см. комментарий там."""
+        body = {"name": name, "startDate": start_date_iso, "endDate": end_date_iso, "originBoardId": board_id}
+        if goal:
+            body["goal"] = goal
+        return self._request("POST", "/rest/agile/1.0/sprint", body)
+
 
 class FakeJiraClient:
     """Для --selftest и разработки без живого Jira-проекта -- те же методы,
     что JiraClient, но в памяти; create_issue выдаёт синтетические ключи."""
 
-    def __init__(self, issue_types: list[dict], fields: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        issue_types: list[dict],
+        fields: list[dict] | None = None,
+        board_candidates: list[dict] | None = None,
+        sprint_capable_board_ids: set[int] | None = None,
+    ) -> None:
         self._issue_types = issue_types
         self._fields = fields or []
+        self._board_candidates = board_candidates or []
+        self._sprint_capable_board_ids = set(sprint_capable_board_ids or [])
         self.created_issues: list[dict] = []
         self.created_links: list[tuple[str, str, str]] = []
+        self.created_sprints: list[dict] = []
         self._next_num = 1
+        self._next_sprint_id = 1
 
     def get_issue_types(self) -> list[dict]:
         return self._issue_types
@@ -321,6 +403,28 @@ class FakeJiraClient:
 
     def create_issue_link(self, link_type: str, outward_key: str, inward_key: str) -> None:
         self.created_links.append((link_type, outward_key, inward_key))
+
+    def get_board_candidates(self) -> list[dict]:
+        return self._board_candidates
+
+    def board_supports_sprints(self, board_id: int) -> bool:
+        return board_id in self._sprint_capable_board_ids
+
+    def create_sprint(
+        self, board_id: int, name: str, start_date_iso: str, end_date_iso: str, goal: str | None = None
+    ) -> dict:
+        sprint = {
+            "id": self._next_sprint_id,
+            "originBoardId": board_id,
+            "name": name,
+            "startDate": start_date_iso,
+            "endDate": end_date_iso,
+        }
+        if goal:
+            sprint["goal"] = goal
+        self._next_sprint_id += 1
+        self.created_sprints.append(sprint)
+        return sprint
 
 
 class _FakeResponse:
@@ -378,6 +482,7 @@ class PlannedIssue:
     sprint_name: str | None = None
     parent_placeholder: str | None = None  # Subtask.parent или Issue.parent/Epic Link
     is_epic_child_issue: bool = False  # True для WBS-Issue -- родитель через Epic Link/parent, не Subtask.parent
+    effort_hours: float | None = None  # timetracking.originalEstimate; None -- в плане нет оценки (WBS, custom Task)
 
 
 @dataclass
@@ -395,6 +500,50 @@ class ExportPlan:
     links: list[PlannedLink]
     skipped_links: list[str]  # человекочитаемые причины пропуска (битые ссылки)
     flat_fallback: bool
+
+
+@dataclass
+class PlannedSprint:
+    name: str  # короткое имя для поля Jira `name` (лимит API -- см. JIRA_SPRINT_NAME_MAX_LENGTH)
+    goal: str  # полное имя из sprint_plan.sprints[].name (с датами), без изменений -- в поле Jira `goal`
+    start_date: str  # YYYY-MM-DD
+    end_date: str  # YYYY-MM-DD
+
+
+SPRINT_NAME_DATE_RANGE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})–(\d{4}-\d{2}-\d{2})(?:, ([^)]+))?\)")
+
+JIRA_SPRINT_NAME_MAX_LENGTH = 30  # обнаружено на живом TPT: HTTP 400 "Długość nazwy sprintu musi być mniejsza niż 30 zn."
+
+
+def parse_sprint_dates_and_label(sprint_name: str) -> tuple[str, str, str | None]:
+    """Извлекает даты начала/конца (и опциональную метку вроде "Гиперподдержка")
+    из уже готового имени спринта (agent/assemble_plan.py, sprint_name():
+    "Спринт N (start–end[, метка])") -- не пересчитывает их заново из
+    sprint_length_weeks/start_date, чтобы не разойтись с тем, что уже
+    зафиксировано в плане."""
+    m = SPRINT_NAME_DATE_RANGE_RE.search(sprint_name)
+    if not m:
+        raise JiraApiError(f"Не удалось извлечь даты спринта из имени {sprint_name!r} -- неожиданный формат")
+    return m.group(1), m.group(2), m.group(3)
+
+
+def build_planned_sprints(plan: dict) -> list[PlannedSprint]:
+    """Полное имя из плана (с датами) идёт в Jira `goal` без изменений --
+    Jira `name` спринта ограничен JIRA_SPRINT_NAME_MAX_LENGTH символами
+    (обнаружено на живом TPT: полное имя с датами это нарушает), поэтому
+    для `name` строится короткая форма "Спринт N" (+ метка, если есть)."""
+    planned = []
+    for s in plan.get("sprint_plan", {}).get("sprints", []):
+        full_name = s["name"]
+        start_date, end_date, label = parse_sprint_dates_and_label(full_name)
+        short_name = f"Спринт {s['sprint']}" + (f" ({label})" if label else "")
+        if len(short_name) > JIRA_SPRINT_NAME_MAX_LENGTH:
+            raise JiraApiError(
+                f"Короткое имя Sprint {short_name!r} ({len(short_name)} симв.) всё равно превышает лимит "
+                f"Jira ({JIRA_SPRINT_NAME_MAX_LENGTH}) -- нужна ручная правка меток в плане, не автоматическая обрезка"
+            )
+        planned.append(PlannedSprint(name=short_name, goal=full_name, start_date=start_date, end_date=end_date))
+    return planned
 
 
 def render_epic_description(plan: dict) -> str:
@@ -489,10 +638,13 @@ def build_export_plan(
     extra_links: list[PlannedLink] = []
     task_sprint = plan.get("sprint_plan", {}).get("task_sprint", {})
     sprint_by_number = {s["sprint"]: s["name"] for s in plan.get("sprint_plan", {}).get("sprints", [])}
+    effort_estimates = plan.get("effort_estimates", {})
 
     for m in plan.get("milestones", []):
         label = m["id"]
         for wbs in m.get("wbs", []):
+            # Агрегированной оценки трудозатрат на уровне WBS в плане нет (только
+            # на уровне Task) -- timetracking для WBS-Issue не выдумывается.
             wbs_issue = PlannedIssue(
                 placeholder_id=wbs["id"],
                 issue_type_name=schema.task_type["name"],
@@ -509,6 +661,7 @@ def build_export_plan(
                 sprint_name = sprint_by_number.get(sprint_number)
                 summary = t["name"]
                 description = render_task_description(t)
+                effort_hours = effort_estimates.get(t["id"], {}).get("hours")
 
                 if flat_fallback:
                     issues.append(
@@ -519,6 +672,7 @@ def build_export_plan(
                             description=description,
                             labels=[label],
                             sprint_name=sprint_name,
+                            effort_hours=effort_hours,
                         )
                     )
                     extra_links.append(PlannedLink(flat_child_link_type, outward_id=t["id"], inward_id=wbs["id"]))
@@ -532,6 +686,7 @@ def build_export_plan(
                             labels=[label],
                             sprint_name=sprint_name,
                             parent_placeholder=wbs["id"],
+                            effort_hours=effort_hours,
                         )
                     )
 
@@ -582,14 +737,16 @@ def format_dry_run_report(export_plan: ExportPlan, schema: ProjectSchema, projec
     for i in export_plan.issues:
         parent_note = f"  parent={i.parent_placeholder}" if i.parent_placeholder else ""
         sprint_note = f"  sprint={i.sprint_name!r}" if i.sprint_name else ""
-        lines.append(f"  {i.placeholder_id}  [{i.issue_type_name}]  \"{i.summary}\"  labels={i.labels}{parent_note}{sprint_note}")
+        estimate_note = f"  originalEstimate={i.effort_hours}h" if i.effort_hours is not None else ""
+        lines.append(f"  {i.placeholder_id}  [{i.issue_type_name}]  \"{i.summary}\"  labels={i.labels}{parent_note}{sprint_note}{estimate_note}")
     lines.append("")
 
     if export_plan.subtasks:
         lines.append(f"-- Subtask ({len(export_plan.subtasks)}) --")
         for s in export_plan.subtasks:
             sprint_note = f"  sprint={s.sprint_name!r}" if s.sprint_name else ""
-            lines.append(f"  {s.placeholder_id}  [{s.issue_type_name}]  \"{s.summary}\"  parent={s.parent_placeholder}  labels={s.labels}{sprint_note}")
+            estimate_note = f"  originalEstimate={s.effort_hours}h" if s.effort_hours is not None else ""
+            lines.append(f"  {s.placeholder_id}  [{s.issue_type_name}]  \"{s.summary}\"  parent={s.parent_placeholder}  labels={s.labels}{sprint_note}{estimate_note}")
         lines.append("")
 
     lines.append(f"-- Issue Link ({len(export_plan.links)}) --")
@@ -603,6 +760,25 @@ def format_dry_run_report(export_plan: ExportPlan, schema: ProjectSchema, projec
             lines.append(f"  ! {msg}")
         lines.append("")
 
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_sprint_dry_run_report(planned_sprints: list[PlannedSprint], board: dict, project_key: str) -> str:
+    lines = ["=== --create-sprints -- DRY-RUN, вызовов на запись не было ===", ""]
+    lines.append(f"Проект: {project_key}")
+    lines.append(f"Доска с Sprint: {board.get('name')!r} (id={board.get('id')}, type={board.get('type')!r})")
+    lines.append("")
+    lines.append(f"Было бы создано: {len(planned_sprints)} Sprint")
+    for sp in planned_sprints:
+        lines.append(
+            f"  name={sp.name!r}  goal={sp.goal!r}  (startDate={sp.start_date}, endDate={sp.end_date})"
+        )
+    lines.append("")
+    lines.append(
+        "Привязка Issue/Subtask к созданным Sprint НЕ выполняется -- имя спринта остаётся "
+        "строкой в description ('Sprint: ...'), как и раньше; консультант проставляет "
+        "нативное поле Sprint вручную после создания."
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -635,6 +811,14 @@ def text_to_adf(text: str) -> dict:
             for line in lines
         ],
     }
+
+
+def _timetracking_fields(planned: PlannedIssue) -> dict:
+    """originalEstimate из effort_estimates -- только если оно есть в плане
+    (WBS-Issue и custom Task без оценки получают {}, а не выдуманное число)."""
+    if planned.effort_hours is None:
+        return {}
+    return {"timetracking": {"originalEstimate": f"{planned.effort_hours}h"}}
 
 
 class ExecutionNotConfirmed(RuntimeError):
@@ -715,6 +899,7 @@ def execute_export(
             "description": text_to_adf(issue_description_with_sprint(issue)),
             "labels": issue.labels,
         }
+        fields.update(_timetracking_fields(issue))
         if issue.parent_placeholder and issue.is_epic_child_issue:
             fields["parent"] = {"key": key_by_placeholder[issue.parent_placeholder]}
         key = client.create_issue(fields)
@@ -732,6 +917,7 @@ def execute_export(
             "labels": sub.labels,
             "parent": {"key": parent_key},
         }
+        fields.update(_timetracking_fields(sub))
         key = client.create_issue(fields)
         key_by_placeholder[sub.placeholder_id] = key
         _persist_state(state_path, key_by_placeholder)
@@ -925,6 +1111,34 @@ def run_selftest() -> None:
     )
     print("[selftest] Sprint пишется первой строкой description (в ADF) созданной Subtask, не в нативный customfield -- OK")
 
+    # --- 5a. timetracking (originalEstimate) -- из effort_estimates, без выдуманных оценок. ---
+    sample_task_id = "T-1.1.1"
+    expected_hours = plan["effort_estimates"][sample_task_id]["hours"]
+    sample_subtask = next(s for s in export_plan.subtasks if s.placeholder_id == sample_task_id)
+    assert sample_subtask.effort_hours == expected_hours, (sample_subtask.effort_hours, expected_hours)
+    assert all(i.effort_hours is None for i in export_plan.issues), (
+        "WBS-Issue не должен получать timetracking -- агрегированной оценки часов на уровне WBS в плане нет"
+    )
+    custom_task_subtask = next(s for s in export_plan.subtasks if s.placeholder_id == "T-4.5-C1")
+    assert custom_task_subtask.effort_hours is None, (
+        "custom Task T-4.5-C1 без effort_estimates не должна получать выдуманную оценку"
+    )
+    print(
+        "[selftest] effort_hours: обычная Task берёт часы из effort_estimates, "
+        "WBS-Issue и custom Task без оценки -- None -- OK"
+    )
+
+    sample_key = key_by_placeholder[sample_task_id]
+    sample_fields = created_by_key[sample_key]["fields"]
+    assert sample_fields["timetracking"]["originalEstimate"] == f"{expected_hours}h", sample_fields.get("timetracking")
+    custom_key = key_by_placeholder["T-4.5-C1"]
+    custom_fields = created_by_key[custom_key]["fields"]
+    assert "timetracking" not in custom_fields, custom_fields.get("timetracking")
+    print(
+        "[selftest] originalEstimate: попадает в fields созданного issue как f'{hours}h', "
+        "отсутствует у Task без effort_estimates -- OK"
+    )
+
     # --- 6. Подтверждение перед --execute -- никогда не выполняется по умолчанию. ---
     try:
         confirm_execution("ESK", export_plan, already_confirmed=False, isatty=False)
@@ -977,6 +1191,114 @@ def run_selftest() -> None:
     finally:
         time.sleep = original_sleep
 
+    # --- 8. --create-sprints (opt-in): парсинг дат, поиск Scrum-доски, создание Sprint. ---
+    planned_sprints = build_planned_sprints(plan)
+    assert len(planned_sprints) == len(plan["sprint_plan"]["sprints"])
+    assert planned_sprints[0].goal == plan["sprint_plan"]["sprints"][0]["name"], (
+        "goal должен содержать полное имя из плана без изменений"
+    )
+    assert planned_sprints[0].name == "Спринт 1", planned_sprints[0].name
+    assert all(len(sp.name) <= JIRA_SPRINT_NAME_MAX_LENGTH for sp in planned_sprints), (
+        "короткое name не должно превышать лимит Jira -- обнаружено на живом TPT (HTTP 400 при полном имени)",
+        [(sp.name, len(sp.name)) for sp in planned_sprints],
+    )
+    assert planned_sprints[0].start_date == "2026-08-03" and planned_sprints[0].end_date == "2026-08-16", (
+        planned_sprints[0]
+    )
+    hypercare_sprint = next(sp for sp in planned_sprints if "Гиперподдержка" in sp.name)
+    assert hypercare_sprint.start_date and hypercare_sprint.end_date, "метка в имени не должна ломать разбор дат"
+    assert "Гиперподдержка" in hypercare_sprint.goal, "метка должна остаться и в полном goal"
+    print(
+        f"[selftest] build_planned_sprints: {len(planned_sprints)} спринтов, короткое name (<={JIRA_SPRINT_NAME_MAX_LENGTH} "
+        f"симв., с меткой Гиперподдержка где есть) + полное goal без изменений, даты распознаются из плана -- OK"
+    )
+
+    # "simple"-доска, которая реально поддерживает Sprint -- воспроизводит находку
+    # на живом проекте TPT: `type` из Agile API не равен "scrum", но Sprint включены.
+    team_managed_board = {"id": 6, "name": "TPT board", "type": "simple"}
+    kanban_board = {"id": 43, "name": "TPT kanban", "type": "kanban"}
+
+    fake_sprints = FakeJiraClient(
+        _company_managed_issue_types(),
+        board_candidates=[kanban_board, team_managed_board],
+        sprint_capable_board_ids={team_managed_board["id"]},
+    )
+    board_found = require_sprint_capable_board(fake_sprints, fake_sprints.get_board_candidates(), "TPT")
+    assert board_found == team_managed_board, board_found
+    print(
+        "[selftest] require_sprint_capable_board: находит доску по реальной поддержке Sprint, "
+        "а не по полю type ('simple', как на живом TPT, а не 'scrum') -- OK"
+    )
+
+    try:
+        require_sprint_capable_board(fake_sprints, [], "TPT")
+    except BoardUnavailableError:
+        print("[selftest] require_sprint_capable_board: досок нет -- остановлено явной ошибкой -- OK")
+    else:
+        raise AssertionError("отсутствие досок должно останавливать --create-sprints")
+
+    fake_no_sprints = FakeJiraClient(
+        _company_managed_issue_types(), board_candidates=[kanban_board], sprint_capable_board_ids=set()
+    )
+    try:
+        require_sprint_capable_board(fake_no_sprints, fake_no_sprints.get_board_candidates(), "TPT")
+    except BoardUnavailableError:
+        print(
+            "[selftest] require_sprint_capable_board: доска есть, но Sprint не поддерживает -- "
+            "остановлено явной ошибкой, доска не включается сама -- OK"
+        )
+    else:
+        raise AssertionError("отсутствие доски с Sprint должно останавливать --create-sprints")
+
+    for sp in planned_sprints:
+        fake_sprints.create_sprint(
+            board_found["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
+        )
+    assert len(fake_sprints.created_sprints) == len(planned_sprints)
+    assert all(c["name"] == sp.name for c, sp in zip(fake_sprints.created_sprints, planned_sprints)), (
+        "name созданного Sprint должен совпадать с коротким name из плана"
+    )
+    assert all(c["goal"] == sp.goal for c, sp in zip(fake_sprints.created_sprints, planned_sprints)), (
+        "goal созданного Sprint должен совпадать с полным именем из плана без изменений"
+    )
+    print(
+        f"[selftest] create_sprint (FakeJiraClient): {len(fake_sprints.created_sprints)} Sprint создано, "
+        f"имена совпадают с планом без изменений, привязка Issue/Subtask не производится -- OK"
+    )
+
+    sprint_report = format_sprint_dry_run_report(planned_sprints, board_found, project_key="TPT")
+    assert "DRY-RUN" in sprint_report
+    assert f"{len(planned_sprints)} Sprint" in sprint_report
+    print("[selftest] --create-sprints dry-run отчёт формируется без ошибок -- OK")
+
+    # board_supports_sprints реального JiraClient -- различает "не поддерживает" (400 с
+    # конкретным текстом) от прочих ошибок (не проглатывается как False молча).
+    class _BoardSprintOpener:
+        def __init__(self, responses: list) -> None:
+            self.responses = list(responses)
+
+        def __call__(self, req: urllib.request.Request):
+            resp = self.responses.pop(0)
+            if isinstance(resp, Exception):
+                raise resp
+            return _FakeResponse(resp)
+
+    unsupported_error = urllib.error.HTTPError(
+        "https://example.atlassian.net/rest/agile/1.0/board/1/sprint",
+        400,
+        "Bad Request",
+        {},
+        io.BytesIO(b'{"errorMessages":["The board does not support sprints"]}'),
+    )
+    board_opener = _BoardSprintOpener([unsupported_error, b'{"values": []}'])
+    client_board_check = JiraClient("https://example.atlassian.net", "a@b.com", "token", "TPT", opener=board_opener)
+    assert client_board_check.board_supports_sprints(1) is False
+    assert client_board_check.board_supports_sprints(6) is True
+    print(
+        "[selftest] JiraClient.board_supports_sprints: различает HTTP 400 'does not support sprints' "
+        "(False) от успешного ответа (True), не путает с type-полем -- OK"
+    )
+
     print("[selftest] Все проверки Jira-экспорта сработали корректно -- OK")
 
 
@@ -1017,6 +1339,12 @@ def main() -> None:
     )
     parser.add_argument("--execute", action="store_true", help="Реально создавать issues в Jira (по умолчанию -- dry-run)")
     parser.add_argument("--confirm", action="store_true", help="Явное подтверждение плана человеком (обязательно вместе с --execute)")
+    parser.add_argument(
+        "--create-sprints",
+        action="store_true",
+        help="Опционально создать Sprint на доске проекта (с включённым Sprint) из sprint_plan.sprints[] "
+             "(по умолчанию выключено, не меняет поведение без явного запроса; без привязки Issue/Subtask к спринту)",
+    )
     parser.add_argument("--selftest", action="store_true", help="Прогнать самопроверку офлайн (FakeJiraClient)")
     args = parser.parse_args()
 
@@ -1059,8 +1387,26 @@ def main() -> None:
 
     export_plan = build_export_plan(plan, schema, flat_fallback, args.flat_child_link_type)
 
+    planned_sprints: list[PlannedSprint] = []
+    board: dict | None = None
+    if args.create_sprints:
+        if client is None:
+            parser.error(
+                "--create-sprints требует живого проекта (--jira-url/--project-key/--email/--api-token), "
+                "не --schema-fixture"
+            )
+        board_candidates = client.get_board_candidates()
+        try:
+            board = require_sprint_capable_board(client, board_candidates, args.project_key)
+        except BoardUnavailableError as exc:
+            print(f"ОСТАНОВЛЕНО: {exc}", file=sys.stderr)
+            sys.exit(2)
+        planned_sprints = build_planned_sprints(plan)
+
     if not args.execute:
         report_text = format_dry_run_report(export_plan, schema, args.project_key or "(из --schema-fixture)")
+        if args.create_sprints:
+            report_text += "\n" + format_sprint_dry_run_report(planned_sprints, board, args.project_key)
         if args.output:
             args.output.write_text(report_text, encoding="utf-8")
             print(f"Записано: {args.output}", file=sys.stderr)
@@ -1080,6 +1426,13 @@ def main() -> None:
     state_path = args.state_file or args.plan.with_name(args.plan.stem + ".jira-export-state.json")
     print(f"key_by_placeholder пишется по ходу создания в: {state_path}", file=sys.stderr)
     execute_export(client, export_plan, args.project_key, state_path=state_path)
+
+    if args.create_sprints:
+        for sp in planned_sprints:
+            created = client.create_sprint(
+                board["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
+            )
+            print(f"Создан Sprint: {created.get('id')}  {sp.name}  (goal={sp.goal!r})")
 
 
 if __name__ == "__main__":
