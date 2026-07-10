@@ -51,6 +51,18 @@ Risks/Deliverables в description Эпика переиспользуют
 (Этап 7.5) целиком -- включая уже применённый `clean_business_text()` --
 а не заново реализуют очистку текста риска.
 
+Устойчивость к сети (найдено на реальном прогоне на TPT): `JiraClient._request`
+ретраит только transient-ошибки (обрыв соединения, HTTP 429/5xx) с
+экспоненциальным backoff (до 4 попыток), не ретраит логические 4xx (400/409
+и т.п.) -- повтор их не исправит. `--execute` дополнительно пишет
+key_by_placeholder (наш ID -> реальный Jira-ключ) в JSON-файл по ходу
+создания (`--state-file`, по умолчанию `<plan>.jira-export-state.json`) --
+переживает обрыв сети, не требует парсинга лога вручную. Оба POST-метода
+(`create_issue`/`create_issue_link`) не идемпотентны -- при обрыве после
+фактического создания на сервере, но до получения ответа, retry рискует
+создать дубль; это не решается автоматически (см. комментарии в коде),
+только смягчается видимостью state-файла для ручной сверки постфактум.
+
 Запуск:
     python3 jira_export.py --plan merged-plan.json \
         --jira-url https://mycompany.atlassian.net --project-key ESK \
@@ -69,6 +81,7 @@ import argparse
 import base64
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -89,6 +102,12 @@ LINK_TYPE_BLOCKS = "Blocks"  # стандартный тип связи Jira (ou
 DEFAULT_FLAT_CHILD_LINK_TYPE = "Relates"  # стандартный тип, доступен в любом проекте по умолчанию
 
 EPIC_PLACEHOLDER_ID = "EPIC"
+
+EPIC_TYPE_NAMES = {"epic", "epik"}  # "epik" -- польская локализация Jira (напр. TPT)
+
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+MAX_REQUEST_ATTEMPTS = 4  # 1 первая попытка + до 3 повторов
+RETRY_BACKOFF_SECONDS = (1, 2, 4)  # пауза после попытки 1, 2, 3 (экспоненциально)
 
 
 class JiraApiError(RuntimeError):
@@ -118,7 +137,7 @@ class ProjectSchema:
 
 def resolve_issue_types(issue_types_raw: list[dict]) -> tuple[dict | None, dict | None, dict | None]:
     subtask_type = next((it for it in issue_types_raw if it.get("subtask")), None)
-    epic_type = next((it for it in issue_types_raw if (it.get("name") or "").strip().lower() == "epic"), None)
+    epic_type = next((it for it in issue_types_raw if (it.get("name") or "").strip().lower() in EPIC_TYPE_NAMES), None)
     non_special = [it for it in issue_types_raw if it is not subtask_type and it is not epic_type]
     task_type = next((it for it in non_special if (it.get("name") or "").strip().lower() == "task"), None)
     if task_type is None and non_special:
@@ -186,26 +205,58 @@ def require_subtask_or_flat_confirmation(schema: ProjectSchema, allow_flat_fallb
 
 
 class JiraClient:
-    def __init__(self, base_url: str, email: str, api_token: str, project_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        email: str,
+        api_token: str,
+        project_key: str,
+        opener=urllib.request.urlopen,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.project_key = project_key
         token = base64.b64encode(f"{email}:{api_token}".encode("utf-8")).decode("ascii")
         self._auth_header = f"Basic {token}"
+        self._opener = opener  # подменяется в --selftest фейковым opener'ом для проверки retry без сети
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict | list:
+        """Ретраит только transient-ошибки (ConnectionResetError/URLError, HTTP
+        429/5xx) с экспоненциальным backoff -- обрыв сети на TPT (Этап 8)
+        показал, что без этого консультанту приходится вручную парсить лог,
+        чтобы понять, что реально создалось. HTTP 400/409 и прочие 4xx (кроме
+        429) -- логическая ошибка запроса (например, невалидный ADF), retry
+        её не исправит и рискует бесполезно задержать явную остановку."""
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", self._auth_header)
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Accept", "application/json")
-        try:
-            with urllib.request.urlopen(req) as resp:
-                raw = resp.read()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise JiraApiError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
+
+        for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("Authorization", self._auth_header)
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Accept", "application/json")
+            try:
+                with self._opener(req) as resp:
+                    raw = resp.read()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if exc.code not in RETRYABLE_HTTP_STATUS or attempt == MAX_REQUEST_ATTEMPTS:
+                    raise JiraApiError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
+                reason = f"HTTP {exc.code}"
+            except (urllib.error.URLError, ConnectionResetError) as exc:
+                if attempt == MAX_REQUEST_ATTEMPTS:
+                    raise JiraApiError(
+                        f"{method} {path} -> сетевая ошибка после {MAX_REQUEST_ATTEMPTS} попыток: {exc}"
+                    ) from exc
+                reason = str(exc)
+
+            delay = RETRY_BACKOFF_SECONDS[attempt - 1]
+            print(
+                f"ПОВТОР {attempt}/{MAX_REQUEST_ATTEMPTS - 1}: {method} {path} -- {reason} (transient) -- "
+                f"жду {delay}с и пробую снова",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
     # --- только чтение -- безопасно и в dry-run ---
 
@@ -219,10 +270,21 @@ class JiraClient:
     # --- запись -- только при --execute ---
 
     def create_issue(self, fields: dict) -> str:
+        """POST не идемпотентен: retry в _request() ретраит только
+        transient-ошибки уровня соединения (когда неизвестно, дошёл ли запрос
+        до сервера) -- если Jira успела создать issue, но ответ не дошёл до
+        клиента, повтор создаст дубль. Тот же класс риска уже проявился на
+        TPT при обрыве create_issue_link. Не решается в этом проходе --
+        полноценная защита требовала бы идемпотентных ключей на стороне Jira,
+        которых REST API v3 не предоставляет; persisted state (execute_export)
+        позволяет обнаружить и вручную сверить дубли постфактум, а не
+        предотвращает их заранее."""
         data = self._request("POST", "/rest/api/3/issue", {"fields": fields})
         return data["key"]
 
     def create_issue_link(self, link_type: str, outward_key: str, inward_key: str) -> None:
+        """Тот же риск дубля при retry после обрыва соединения, что и в
+        create_issue выше -- см. комментарий там."""
         self._request(
             "POST",
             "/rest/api/3/issueLink",
@@ -259,6 +321,41 @@ class FakeJiraClient:
 
     def create_issue_link(self, link_type: str, outward_key: str, inward_key: str) -> None:
         self.created_links.append((link_type, outward_key, inward_key))
+
+
+class _FakeResponse:
+    """Имитирует объект, который возвращает urllib.request.urlopen -- context
+    manager с .read(), для проверки JiraClient._request через фейковый opener."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class _FlakyOpener:
+    """Фейковый opener для JiraClient(..., opener=...) -- кидает
+    ConnectionResetError на первых `fail_times` вызовах, затем отдаёт
+    успешный ответ. Используется только в --selftest, для проверки retry
+    в _request() без обращения к сети."""
+
+    def __init__(self, fail_times: int, response_body: bytes = b'{"key": "TPT-999"}') -> None:
+        self.fail_times = fail_times
+        self.response_body = response_body
+        self.calls = 0
+
+    def __call__(self, req: urllib.request.Request) -> _FakeResponse:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise ConnectionResetError("[Errno 104] Connection reset by peer (симуляция для --selftest)")
+        return _FakeResponse(self.response_body)
 
 
 def load_schema_fixture(path: Path) -> tuple[list[dict], list[dict]]:
@@ -522,6 +619,24 @@ def issue_description_with_sprint(planned: PlannedIssue) -> str:
     return f"Sprint: {planned.sprint_name}\n\n{planned.description}"
 
 
+def text_to_adf(text: str) -> dict:
+    """Jira Cloud API v3 принимает description только в Atlassian Document
+    Format (ADF), не голой строкой. Каждая строка исходного текста -- отдельный
+    параграф; пустая строка -- пустой параграф (сохраняет исходные пропуски).
+    Markdown-таблицы (риск-секция Epic из render_risks) не разбираются в
+    настоящую ADF-таблицу -- остаются построчным текстом с '|' -- см.
+    CHANGELOG.md."""
+    lines = text.split("\n")
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": line}]} if line else {"type": "paragraph"}
+            for line in lines
+        ],
+    }
+
+
 class ExecutionNotConfirmed(RuntimeError):
     """--execute был передан без --confirm, и подтверждение не было получено
     (ни явным флагом, ни интерактивным вводом) -- создание не выполняется."""
@@ -553,7 +668,27 @@ def confirm_execution(
         raise ExecutionNotConfirmed("подтверждение не получено (ответ отличен от yes/y/да)")
 
 
-def execute_export(client, export_plan: ExportPlan, project_key: str, verbose: bool = True) -> dict[str, str]:
+def _persist_state(state_path: Path | None, key_by_placeholder: dict[str, str]) -> None:
+    """Пишет весь key_by_placeholder на диск после каждого успешного
+    create_issue -- переживает обрыв сети (инцидент на TPT потребовал
+    восстанавливать этот маппинг парсингом текстового лога вручную).
+    Перезаписывает файл целиком: объём (десятки-сотни записей на реальный
+    план) не оправдывает append-only формат."""
+    if state_path is None:
+        return
+    state_path.write_text(
+        json.dumps(key_by_placeholder, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def execute_export(
+    client,
+    export_plan: ExportPlan,
+    project_key: str,
+    verbose: bool = True,
+    state_path: Path | None = None,
+) -> dict[str, str]:
     def log(msg: str) -> None:
         if verbose:
             print(msg)
@@ -565,10 +700,11 @@ def execute_export(client, export_plan: ExportPlan, project_key: str, verbose: b
         "project": {"key": project_key},
         "issuetype": {"name": epic.issue_type_name},
         "summary": epic.summary,
-        "description": epic.description,
+        "description": text_to_adf(epic.description),
     }
     epic_key = client.create_issue(epic_fields)
     key_by_placeholder[epic.placeholder_id] = epic_key
+    _persist_state(state_path, key_by_placeholder)
     log(f"Создан Epic: {epic_key}")
 
     for issue in export_plan.issues:
@@ -576,13 +712,14 @@ def execute_export(client, export_plan: ExportPlan, project_key: str, verbose: b
             "project": {"key": project_key},
             "issuetype": {"name": issue.issue_type_name},
             "summary": issue.summary,
-            "description": issue_description_with_sprint(issue),
+            "description": text_to_adf(issue_description_with_sprint(issue)),
             "labels": issue.labels,
         }
         if issue.parent_placeholder and issue.is_epic_child_issue:
             fields["parent"] = {"key": key_by_placeholder[issue.parent_placeholder]}
         key = client.create_issue(fields)
         key_by_placeholder[issue.placeholder_id] = key
+        _persist_state(state_path, key_by_placeholder)
         log(f"Создан Issue: {key}  ({issue.placeholder_id})")
 
     for sub in export_plan.subtasks:
@@ -591,12 +728,13 @@ def execute_export(client, export_plan: ExportPlan, project_key: str, verbose: b
             "project": {"key": project_key},
             "issuetype": {"name": sub.issue_type_name},
             "summary": sub.summary,
-            "description": issue_description_with_sprint(sub),
+            "description": text_to_adf(issue_description_with_sprint(sub)),
             "labels": sub.labels,
             "parent": {"key": parent_key},
         }
         key = client.create_issue(fields)
         key_by_placeholder[sub.placeholder_id] = key
+        _persist_state(state_path, key_by_placeholder)
         log(f"Создан Subtask: {key}  ({sub.placeholder_id})")
 
     for lnk in export_plan.links:
@@ -737,6 +875,25 @@ def run_selftest() -> None:
     assert f"{len(export_plan.issues)} Issue" in report_text
     print("[selftest] dry-run отчёт формируется без ошибок -- OK")
 
+    # --- 4a. text_to_adf -- валидный ADF на многострочном input (пустые строки + risk-таблица). ---
+    sample_multiline = (
+        "Заказчик: ABC\n\n"
+        "| Риск | Затрагивает |\n"
+        "|---|---|\n"
+        "| Версия ERP не указана | Подготовка |\n"
+    )
+    adf = text_to_adf(sample_multiline)
+    assert adf["type"] == "doc" and adf["version"] == 1
+    assert all(p["type"] == "paragraph" for p in adf["content"])
+    non_empty = [p for p in adf["content"] if "content" in p]
+    empty = [p for p in adf["content"] if "content" not in p]
+    assert any(p["content"][0]["text"] == "Заказчик: ABC" for p in non_empty)
+    assert any(p["content"][0]["text"] == "| Риск | Затрагивает |" for p in non_empty), (
+        "risk-таблица должна остаться построчным текстом внутри параграфов (не ADF-таблицей)"
+    )
+    assert empty, "пустая строка должна давать параграф без content, а не пропадать"
+    print("[selftest] text_to_adf: валидный ADF-документ на многострочном input (пустые строки + risk-таблица построчно) -- OK")
+
     # --- 5. execute -- через FakeJiraClient; счётчики совпадают с dry-run. ---
     fake = FakeJiraClient(_company_managed_issue_types(), _fields_with_sprint_and_epic_link())
     key_by_placeholder = execute_export(fake, export_plan, project_key="ESK", verbose=False)
@@ -759,13 +916,14 @@ def run_selftest() -> None:
     subtask_with_sprint = next(s for s in export_plan.subtasks if s.sprint_name)
     created_subtask_key = key_by_placeholder[subtask_with_sprint.placeholder_id]
     created_fields = created_by_key[created_subtask_key]["fields"]
-    assert created_fields["description"].startswith(f"Sprint: {subtask_with_sprint.sprint_name}\n\n"), (
-        created_fields["description"][:120]
-    )
+    description_adf = created_fields["description"]
+    assert description_adf["type"] == "doc" and description_adf["version"] == 1, description_adf
+    first_paragraph_text = description_adf["content"][0]["content"][0]["text"]
+    assert first_paragraph_text == f"Sprint: {subtask_with_sprint.sprint_name}", first_paragraph_text
     assert "customfield_10020" not in created_fields, (
         "Sprint field id не должен подставляться в fields без реальных Sprint-сущностей -- см. docstring"
     )
-    print("[selftest] Sprint пишется первой строкой description созданной Subtask, не в нативный customfield -- OK")
+    print("[selftest] Sprint пишется первой строкой description (в ADF) созданной Subtask, не в нативный customfield -- OK")
 
     # --- 6. Подтверждение перед --execute -- никогда не выполняется по умолчанию. ---
     try:
@@ -787,6 +945,37 @@ def run_selftest() -> None:
 
     confirm_execution("ESK", export_plan, already_confirmed=False, isatty=True, input_fn=lambda _: "yes")
     print("[selftest] confirm_execution: интерактивный ответ 'yes' -- подтверждено -- OK")
+
+    # --- 7. retry с backoff в _request() на transient ConnectionResetError. ---
+    # time.sleep подменяется на no-op -- иначе тест реально ждал бы 1+2+4=7с на
+    # ветку исчерпания попыток, а корректность retry от этого не зависит.
+    original_sleep = time.sleep
+    time.sleep = lambda seconds: None
+    try:
+        flaky = _FlakyOpener(fail_times=2)
+        client_retry = JiraClient("https://example.atlassian.net", "a@b.com", "token", "ESK", opener=flaky)
+        key = client_retry.create_issue({"summary": "test"})
+        assert key == "TPT-999", key
+        assert flaky.calls == 3, flaky.calls  # 2 неудачные попытки + 1 успешная
+        print(
+            "[selftest] retry: ConnectionResetError на 1-й/2-й попытке, успех на 3-й -- "
+            "issue создан один раз (не задублирован) -- OK"
+        )
+
+        exhausted = _FlakyOpener(fail_times=MAX_REQUEST_ATTEMPTS + 1)  # больше попыток, чем есть у клиента
+        client_exhausted = JiraClient("https://example.atlassian.net", "a@b.com", "token", "ESK", opener=exhausted)
+        try:
+            client_exhausted.create_issue({"summary": "test"})
+        except JiraApiError:
+            print(
+                f"[selftest] retry: исчерпание всех {MAX_REQUEST_ATTEMPTS} попыток -- "
+                f"JiraApiError поднят наверх, не проглочен молча -- OK"
+            )
+        else:
+            raise AssertionError("исчерпание retry-попыток должно поднимать JiraApiError, а не проходить молча")
+        assert exhausted.calls == MAX_REQUEST_ATTEMPTS, exhausted.calls
+    finally:
+        time.sleep = original_sleep
 
     print("[selftest] Все проверки Jira-экспорта сработали корректно -- OK")
 
@@ -819,6 +1008,13 @@ def main() -> None:
         help=f"Тип Issue Link между Task и WBS в плоской структуре (по умолчанию {DEFAULT_FLAT_CHILD_LINK_TYPE!r})",
     )
     parser.add_argument("--output", type=Path, help="Куда записать dry-run отчёт (по умолчанию -- stdout)")
+    parser.add_argument(
+        "--state-file",
+        type=Path,
+        help="Куда писать key_by_placeholder (наш ID -> реальный Jira-ключ) по мере --execute -- "
+             "переживает обрыв сети, не требует парсинга лога вручную "
+             "(по умолчанию: <plan>.jira-export-state.json рядом с --plan)",
+    )
     parser.add_argument("--execute", action="store_true", help="Реально создавать issues в Jira (по умолчанию -- dry-run)")
     parser.add_argument("--confirm", action="store_true", help="Явное подтверждение плана человеком (обязательно вместе с --execute)")
     parser.add_argument("--selftest", action="store_true", help="Прогнать самопроверку офлайн (FakeJiraClient)")
@@ -881,7 +1077,9 @@ def main() -> None:
         print(f"Отменено: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    execute_export(client, export_plan, args.project_key)
+    state_path = args.state_file or args.plan.with_name(args.plan.stem + ".jira-export-state.json")
+    print(f"key_by_placeholder пишется по ходу создания в: {state_path}", file=sys.stderr)
+    execute_export(client, export_plan, args.project_key, state_path=state_path)
 
 
 if __name__ == "__main__":
