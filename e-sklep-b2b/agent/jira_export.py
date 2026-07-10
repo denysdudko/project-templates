@@ -51,14 +51,20 @@ Sprint (`customfield_...`, обнаруживается через `GET /rest/ap
 `schema.sprint_field_id`, если найден, только показывается в dry-run
 отчёте для консультанта, но не проставляется в issue напрямую.
 
-При `--create-sprints` (opt-in) это ограничение снимается для реально
-созданных Sprint: после `execute_export()` и создания Sprint скрипт
-собирает по `sprint_plan.task_sprint` реальные ключи Issue/Subtask на
-каждый Sprint и привязывает их через `POST /rest/agile/1.0/sprint/{id}/issue`
-(пакетами по `MAX_ISSUES_PER_SPRINT_LINK_BATCH`, лимит Jira Agile API) --
-это устанавливает нативное поле Sprint напрямую, а не только текст в
-description. Без `--create-sprints` поведение не меняется (текст в
-description остаётся единственным способом).
+При `--create-sprints` (opt-in) это ограничение снимается, но только в
+плоском режиме (`--allow-flat-fallback`, Task экспортируются как Issue, не
+Subtask): после `execute_export()` и создания Sprint скрипт собирает по
+`sprint_plan.task_sprint` реальные ключи Issue на каждый Sprint и
+привязывает их через `POST /rest/agile/1.0/sprint/{id}/issue` (пакетами по
+`MAX_ISSUES_PER_SPRINT_LINK_BATCH`, лимит Jira Agile API) -- это
+устанавливает нативное поле Sprint напрямую, а не только текст в
+description. В стандартном Subtask-режиме `--create-sprints` останавливается
+явной `SprintLinkingUnavailableError` (`require_sprint_linking_possible`) --
+обнаружено эмпирически на живом TPT: Jira Sub-task не хранит поле Sprint
+независимо от родителя (POST возвращает 204, но customfield остаётся
+null), скрипт не подменяет привязку неточной привязкой родительского
+WBS-Issue и не делает вид, что она удалась. Без `--create-sprints`
+поведение не меняется (текст в description остаётся единственным способом).
 
 Риски в description Эпика -- настоящая ADF-таблица (`build_risks_adf_table`),
 не markdown-текст: `clean_business_text()` и сбор `related_wbs` -> имена
@@ -148,6 +154,12 @@ class BoardUnavailableError(RuntimeError):
     """--create-sprints: у проекта нет доски или ни одна не Scrum (не
     поддерживает спринты) -- скрипт не создаёт доску самостоятельно,
     решение явно за человеком (по аналогии с SubtaskUnavailableError)."""
+
+
+class SprintLinkingUnavailableError(RuntimeError):
+    """--create-sprints в стандартном Subtask-режиме: Jira Sub-task не
+    хранит поле Sprint независимо от родителя -- скрипт не делает вид, что
+    привязка удалась, а останавливается явно (см. require_sprint_linking_possible)."""
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +273,31 @@ def require_sprint_capable_board(client, board_candidates: list[dict], project_k
         f"У проекта {project_key} есть доска(и) (типы: {checked_types}), но ни одна не поддерживает "
         "Sprint (GET /rest/agile/1.0/board/{id}/sprint отклонён как 'does not support sprints') -- "
         "--create-sprints требует доску с включённой функцией Sprint, скрипт её не включает."
+    )
+
+
+def require_sprint_linking_possible(flat_fallback: bool) -> None:
+    """Привязка Issue/Subtask к Sprint (link_issues_to_sprints) требует, чтобы
+    Task экспортировались как отдельные Issue (плоский режим), а не как
+    Subtask -- Jira Sub-task не хранит поле Sprint независимо от родителя
+    (обнаружено эмпирически на живом TPT: POST /rest/agile/1.0/sprint/{id}/issue
+    вернул 204, но customfield Sprint у Subtask остался null; тот же вызов на
+    обычном Issue сработал сразу). Скрипт не подменяет привязку отдельных
+    Task неточной привязкой родительского WBS-Issue (в client-abc 7 из 39
+    WBS содержат Task в разных спринтах -- такая замена была бы неверной
+    для них) и не делает вид, что привязка удалась -- останавливается явно,
+    по аналогии с require_subtask_or_flat_confirmation."""
+    if flat_fallback:
+        return
+    raise SprintLinkingUnavailableError(
+        "Task экспортируются как Subtask (Subtask доступен в проекте, стандартный режим) -- Jira "
+        "Sub-task не хранит поле Sprint независимо от родителя (обнаружено эмпирически на живом TPT: "
+        "POST /rest/agile/1.0/sprint/{id}/issue вернул 204, но customfield Sprint у Subtask остался "
+        "null; тот же вызов на обычном Issue сработал сразу). Привязка отдельных Task к Sprint в этом "
+        "режиме структурно невозможна -- скрипт не подменяет её неточной привязкой родительского "
+        "WBS-Issue (в client-abc 7 из 39 WBS содержат Task в разных спринтах) и не делает вид, что "
+        "привязка удалась. Вопрос консультанту: принять плоскую структуру (WBS и Task -- оба Issue, "
+        "тогда Sprint можно привязать напрямую)? Если да -- повторите запуск с флагом --allow-flat-fallback."
     )
 
 
@@ -1551,6 +1588,22 @@ def run_selftest() -> None:
     else:
         raise AssertionError("отсутствие доски с Sprint должно останавливать --create-sprints")
 
+    # require_sprint_linking_possible: Jira не хранит Sprint у Subtask независимо от
+    # родителя -- --create-sprints в стандартном Subtask-режиме (flat_fallback=False)
+    # должен останавливаться явно, а не тихо создавать Sprint без реальной привязки.
+    try:
+        require_sprint_linking_possible(flat_fallback=False)
+    except SprintLinkingUnavailableError:
+        print(
+            "[selftest] require_sprint_linking_possible: Subtask-режим -- остановлено явной "
+            "ошибкой, привязка не делает вид, что удалась -- OK"
+        )
+    else:
+        raise AssertionError("--create-sprints в Subtask-режиме должен останавливаться явной ошибкой")
+
+    require_sprint_linking_possible(flat_fallback=True)  # не должно поднять исключение
+    print("[selftest] require_sprint_linking_possible: плоский режим -- пропущено без ошибки -- OK")
+
     for sp in planned_sprints:
         fake_sprints.create_sprint(
             board_found["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
@@ -1743,6 +1796,13 @@ def main() -> None:
     except JiraApiError as exc:
         print(f"ОШИБКА: {exc}", file=sys.stderr)
         sys.exit(2)
+
+    if args.create_sprints:
+        try:
+            require_sprint_linking_possible(flat_fallback)
+        except SprintLinkingUnavailableError as exc:
+            print(f"ОСТАНОВЛЕНО: {exc}", file=sys.stderr)
+            sys.exit(2)
 
     export_plan = build_export_plan(plan, schema, flat_fallback, args.flat_child_link_type)
 
