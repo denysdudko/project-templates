@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.24 — Jira-экспорт: description Эпика — настоящие ADF-таблицы, отдельный блок "Описание"
+- `description` Эпика при `--execute` теперь строится напрямую как ADF (`build_epic_description_adf`, поле `PlannedIssue.description_adf`), а не через построчный `text_to_adf()` — закрывает известное ограничение из v1.19 (markdown-таблица рисков оставалась построчным текстом с `|`, не настоящей ADF-таблицей).
+- Добавлен отдельный блок "Описание" (из `charter.description` = `project.description` в `schema/milestones_wbs.yaml`, отдельно от уже существующего "Цель" = `charter.objective`/`project.objective`).
+- "Риски проекта" — настоящая ADF-таблица (`build_risks_adf_table`): столбцы "Риск"/"Затрагивает", `tableRow`/`tableCell`/`tableHeader`; ячейка "Риск" — полноценный ADF-параграф (допускает форматирование), не голая строка. `clean_business_text()`/`human_refs()` из `generate_client_document.py` (Этап 7.5) переиспользованы как есть.
+- "Критерии завершения этапов" — заменены: было по одному пункту `verification_checklist` на Task, агрегированному по Milestone (как в `render_deliverables()`, Этап 7.5); стало — одна ADF-таблица `ID`/`Название`/`Описание` по `milestones`/`wbs` верхнего уровня плана (там уже есть `id`/`name`/`description` из `schema/milestones_wbs.yaml`): строка Milestone (жирным), затем строки его WBS, без строк Task.
+- `render_epic_description()` (текстовая версия, используется только в dry-run отчёте для консультанта) обновлена аналогично — блок "Описание" + таблица критериев по Milestone/WBS вместо `render_deliverables()`; `render_deliverables()` не удалена — остаётся в `generate_client_document.py` для клиентского документа (Этап 7.5), не участвует в Jira-экспорте.
+- `--selftest`: новые проверки читают `description_adf` Epic напрямую — ровно 2 узла `table` (Риски + Критерии), правильные заголовки колонок, строки Критериев = ровно Milestone-ID ∪ WBS-ID без единого Task-ID, ни один текст риска не содержит `|`.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не менялись; правка только в `jira_export.py`.
+
 ## v1.23 — Jira-экспорт: короткое имя Sprint (лимит Jira 30 символов)
 - Найдено на реальном создании 6 Sprint в TPT (первая попытка после v1.22): `POST /rest/agile/1.0/sprint` отклонён с `HTTP 400: "Długość nazwy sprintu musi być mniejsza niż 30 zn."` (имя Sprint должно быть короче 30 символов) — полное имя из плана (например, `"Спринт 1 (2026-08-03–2026-08-16)"`, 33 символа) в это не укладывается. Ни один Sprint создан не был (упало на первой же попытке).
 - `PlannedSprint`: разделены `name` (короткое, `"Спринт N"` + метка вроде "Гиперподдержка", если есть — все 6 укладываются в лимит) и `goal` (полное имя из плана с датами, без изменений). В Jira `name` идёт короткая форма (обязательное поле API), `goal` — полное имя из плана (необязательное поле, лимитом не ограничено).

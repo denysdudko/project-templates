@@ -10,8 +10,9 @@
     Наш уровень          Jira
     -------------------  ------------------------------------------------
     Весь план            1 Epic (summary = charter.project_name,
-                          description = цель/даты/заказчик + Риски +
-                          Deliverables)
+                          description = Описание + Цель + даты/заказчик +
+                          Риски (ADF-таблица) + Критерии завершения этапов
+                          (ADF-таблица))
     Milestone (M1-M9)     Label на каждой issue/subtask (M3, M6 и т.п.)
     WBS                   Issue, child Эпика -- summary = название WBS
     Task (наш)             Subtask под соответствующим WBS-Issue --
@@ -19,8 +20,12 @@
                           Interview/Verification checklist, Sprint = имя
                           спринта (sprint_plan.sprints[].name)
     depends_on/used_by    Issue Links (Blocks: "outward blocks inward")
-    Риски (сработавшие)   Секция текста в description Эпика (не отдельные issue)
-    Deliverables          Секция текста в description Эпика по milestone
+    Риски (сработавшие)   Настоящая ADF-таблица (Риск / Затрагивает) в
+                          description Эпика (не отдельные issue)
+    Критерии завершения   Настоящая ADF-таблица (ID / Название / Описание):
+                          строка Milestone (жирным), затем строки его WBS --
+                          без строк Task (см. milestones/wbs в плане, не
+                          verification_checklist задач)
 
 Обязательное предусловие: перед построением маппинга скрипт запрашивает у
 целевого Jira-проекта реальные issuetypes (`GET /rest/api/3/project/{key}`)
@@ -46,10 +51,19 @@ Sprint (`customfield_...`, обнаруживается через `GET /rest/ap
 `schema.sprint_field_id`, если найден, только показывается в dry-run
 отчёте для консультанта, но не проставляется в issue напрямую.
 
-Risks/Deliverables в description Эпика переиспользуют
-`render_risks`/`render_deliverables` из `generate_client_document.py`
-(Этап 7.5) целиком -- включая уже применённый `clean_business_text()` --
-а не заново реализуют очистку текста риска.
+Риски в description Эпика -- настоящая ADF-таблица (`build_risks_adf_table`),
+не markdown-текст: `clean_business_text()` и сбор `related_wbs` -> имена
+переиспользуются из `generate_client_document.py` (Этап 7.5) как есть, но
+результат собирается в узлы `table`/`tableRow`/`tableCell`, а не в строку с
+`|`. Ячейка "Риск" -- полноценный ADF-параграф, допускает форматирование.
+
+Критерии завершения этапов в description Эпика -- тоже настоящая ADF-таблица
+(`build_criteria_adf_table`), столбцы ID/Название/Описание: строка Milestone
+(жирным), затем строки его WBS, без строк Task. Источник -- `milestones`/
+`wbs` верхнего уровня плана (у них уже есть `id`/`name`/`description` из
+`schema/milestones_wbs.yaml`), а не агрегированный `verification_checklist`
+задач, как раньше в `render_deliverables()` (Этап 7.5, используется только
+клиентским документом, `generate_client_document.py`, не Jira-экспортом).
 
 Устойчивость к сети (найдено на реальном прогоне на TPT): `JiraClient._request`
 ретраит только transient-ошибки (обрыв соединения, HTTP 429/5xx) с
@@ -92,8 +106,8 @@ from pathlib import Path
 from generate_client_document import (
     build_id_to_name,
     clean_business_text,
+    human_refs,
     integration_task_ids,
-    render_deliverables,
     render_risks,
 )
 from validate_plan import flatten_tasks, validate_plan
@@ -483,6 +497,9 @@ class PlannedIssue:
     parent_placeholder: str | None = None  # Subtask.parent или Issue.parent/Epic Link
     is_epic_child_issue: bool = False  # True для WBS-Issue -- родитель через Epic Link/parent, не Subtask.parent
     effort_hours: float | None = None  # timetracking.originalEstimate; None -- в плане нет оценки (WBS, custom Task)
+    description_adf: dict | None = None  # только у Epic: настоящий ADF (таблицы риск/критерии), не текст --
+    # `description` остаётся человекочитаемым текстом для dry-run отчёта; при `--execute` описание Epic
+    # берётся из description_adf напрямую (см. execute_export), в text_to_adf() не проходит
 
 
 @dataclass
@@ -546,10 +563,33 @@ def build_planned_sprints(plan: dict) -> list[PlannedSprint]:
     return planned
 
 
+def render_criteria_text(plan: dict) -> str:
+    """Текстовый (не ADF) аналог build_criteria_adf_table -- используется
+    только в dry-run отчёте для консультанта, читается в консоли. Одна
+    таблица ID/Название/Описание: строка Milestone, затем строки его WBS,
+    без строк Task."""
+    lines = ["## Критерии завершения этапов", "", "| ID | Название | Описание |", "|---|---|---|"]
+    for m in plan.get("milestones", []):
+        lines.append(f"| **{m['id']}** | **{m['name']}** | {_table_cell_text(m.get('description'))} |")
+        for wbs in m.get("wbs", []):
+            lines.append(f"| {wbs['id']} | {wbs['name']} | {_table_cell_text(wbs.get('description'))} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _table_cell_text(text: str | None) -> str:
+    return " ".join((text or "").split()).replace("|", "/")
+
+
 def render_epic_description(plan: dict) -> str:
+    """Человекочитаемый текст -- используется только в dry-run отчёте.
+    Реальное значение Jira description при --execute строится отдельно, как
+    ADF (build_epic_description_adf), а не через эту строку/text_to_adf."""
     c = plan["charter"]
-    header_lines = [
-        f"Заказчик: {c['client']}",
+    header_lines = [f"Заказчик: {c['client']}"]
+    if c.get("description"):
+        header_lines.append(f"Описание: {c['description']}")
+    header_lines += [
         f"Цель: {c['objective']}",
         f"Дата начала: {c['start_date']}",
         f"Дата запуска в эксплуатацию: {c['target_launch_date']}",
@@ -562,9 +602,102 @@ def render_epic_description(plan: dict) -> str:
     parts = [
         "\n".join(header_lines),
         render_risks(plan, id_to_name),
-        render_deliverables(plan, integration_ids),
+        render_criteria_text(plan),
     ]
     return "\n".join(parts).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# ADF (Atlassian Document Format) -- настоящие таблицы для description Эпика.
+# Только Epic получает structured ADF напрямую (description_adf); обычные
+# Issue/Subtask по-прежнему проходят через text_to_adf() построчно.
+# ---------------------------------------------------------------------------
+
+
+def _adf_text_paragraph(text: str | None, bold: bool = False) -> dict:
+    text = text or ""
+    if not text:
+        return {"type": "paragraph"}
+    node: dict = {"type": "text", "text": text}
+    if bold:
+        node["marks"] = [{"type": "strong"}]
+    return {"type": "paragraph", "content": [node]}
+
+
+def _adf_table_cell(text: str | None, header: bool = False, bold: bool = False) -> dict:
+    return {
+        "type": "tableHeader" if header else "tableCell",
+        "attrs": {},
+        "content": [_adf_text_paragraph(text, bold=bold)],
+    }
+
+
+def _adf_table_row(cells: list[str], header: bool = False, bold: bool = False) -> dict:
+    return {"type": "tableRow", "content": [_adf_table_cell(c, header=header, bold=bold) for c in cells]}
+
+
+def _adf_heading(text: str, level: int = 2) -> dict:
+    return {"type": "heading", "attrs": {"level": level}, "content": [{"type": "text", "text": text}]}
+
+
+def build_risks_adf_table(plan: dict, id_to_name: dict[str, str]) -> dict:
+    """Настоящая ADF-таблица (Риск / Затрагивает), не markdown-текст внутри
+    параграфов (закрывает известное ограничение из CHANGELOG v1.19). Ячейка
+    "Риск" -- полноценный ADF-параграф (допускает форматирование), не голая
+    строка. clean_business_text()/human_refs() переиспользованы как есть из
+    generate_client_document.py (Этап 7.5) -- очистка текста не дублируется."""
+    rows = [_adf_table_row(["Риск", "Затрагивает"], header=True)]
+    risks = plan.get("risks") or []
+    if not risks:
+        rows.append(_adf_table_row(["Для параметров этого проекта применимых рисков из реестра не выявлено.", "—"]))
+    else:
+        for r in risks:
+            risk_text = clean_business_text(" ".join((r.get("risk") or "").split()))
+            affects = human_refs(r.get("related_wbs") or [], id_to_name)
+            rows.append(_adf_table_row([risk_text, affects]))
+    return {"type": "table", "attrs": {"isNumberColumnEnabled": False, "layout": "default"}, "content": rows}
+
+
+def build_criteria_adf_table(plan: dict) -> dict:
+    """Настоящая ADF-таблица ID/Название/Описание: строка Milestone (жирным),
+    затем строки его WBS, следующий Milestone и т.д. -- без строк Task.
+    Источник -- milestones/wbs верхнего уровня плана (id/name/description уже
+    заданы в schema/milestones_wbs.yaml), не агрегированный
+    verification_checklist задач (это делал прежний render_deliverables(),
+    который остаётся только в generate_client_document.py, Этап 7.5)."""
+    rows = [_adf_table_row(["ID", "Название", "Описание"], header=True)]
+    for m in plan.get("milestones", []):
+        rows.append(_adf_table_row([m["id"], m["name"], _table_cell_text(m.get("description"))], bold=True))
+        for wbs in m.get("wbs", []):
+            rows.append(_adf_table_row([wbs["id"], wbs["name"], _table_cell_text(wbs.get("description"))]))
+    return {"type": "table", "attrs": {"isNumberColumnEnabled": False, "layout": "default"}, "content": rows}
+
+
+def build_epic_description_adf(plan: dict) -> dict:
+    """Реальное значение Jira description Эпика при --execute (структурный
+    ADF: параграфы шапки + настоящие таблицы Риски/Критерии), в отличие от
+    render_epic_description() (плоский текст, только для dry-run отчёта)."""
+    c = plan["charter"]
+    integration_ids = integration_task_ids(plan)
+    id_to_name = build_id_to_name(plan, collapse_ids=integration_ids)
+
+    content: list[dict] = [_adf_text_paragraph(f"Заказчик: {c['client']}")]
+    if c.get("description"):
+        content.append(_adf_text_paragraph(f"Описание: {c['description']}"))
+    content.extend(
+        [
+            _adf_text_paragraph(f"Цель: {c['objective']}"),
+            _adf_text_paragraph(f"Дата начала: {c['start_date']}"),
+            _adf_text_paragraph(f"Дата запуска в эксплуатацию: {c['target_launch_date']}"),
+            {"type": "paragraph"},
+            _adf_text_paragraph(c["target_launch_date_definition"]),
+            _adf_heading("Риски проекта"),
+            build_risks_adf_table(plan, id_to_name),
+            _adf_heading("Критерии завершения этапов"),
+            build_criteria_adf_table(plan),
+        ]
+    )
+    return {"type": "doc", "version": 1, "content": content}
 
 
 def render_task_description(t: dict) -> str:
@@ -630,7 +763,8 @@ def build_export_plan(
         placeholder_id=EPIC_PLACEHOLDER_ID,
         issue_type_name=schema.epic_type["name"],
         summary=plan["charter"]["project_name"],
-        description=render_epic_description(plan),
+        description=render_epic_description(plan),  # текст -- только для dry-run отчёта
+        description_adf=build_epic_description_adf(plan),  # реальный ADF -- для --execute
     )
 
     issues: list[PlannedIssue] = []
@@ -799,9 +933,10 @@ def text_to_adf(text: str) -> dict:
     """Jira Cloud API v3 принимает description только в Atlassian Document
     Format (ADF), не голой строкой. Каждая строка исходного текста -- отдельный
     параграф; пустая строка -- пустой параграф (сохраняет исходные пропуски).
-    Markdown-таблицы (риск-секция Epic из render_risks) не разбираются в
-    настоящую ADF-таблицу -- остаются построчным текстом с '|' -- см.
-    CHANGELOG.md."""
+    Используется для Issue/Subtask description. Epic description при
+    --execute берёт structured ADF из PlannedIssue.description_adf напрямую
+    (настоящие таблицы Риски/Критерии), эту построчную функцию не проходит --
+    см. build_epic_description_adf."""
     lines = text.split("\n")
     return {
         "type": "doc",
@@ -884,7 +1019,7 @@ def execute_export(
         "project": {"key": project_key},
         "issuetype": {"name": epic.issue_type_name},
         "summary": epic.summary,
-        "description": text_to_adf(epic.description),
+        "description": epic.description_adf if epic.description_adf is not None else text_to_adf(epic.description),
     }
     epic_key = client.create_issue(epic_fields)
     key_by_placeholder[epic.placeholder_id] = epic_key
@@ -1016,12 +1151,46 @@ def run_selftest() -> None:
     assert hypercare, "метка гиперподдержки не найдена ни у одной Subtask -- ветка не проверена"
     print(f"[selftest] Sprint у Subtask -- имя спринта (в т.ч. метка гиперподдержки у {hypercare[0].placeholder_id}) -- OK")
 
-    # Epic description -- риски очищены через clean_business_text (переиспользован
-    # render_risks, не переизобретён), интеграции схлопнуты (переиспользован render_deliverables).
+    # Epic description (текст, dry-run отчёт) -- риски очищены через
+    # clean_business_text (переиспользован render_risks, не переизобретён),
+    # присутствуют charter.description и charter.objective.
     assert "WBS-2.1)" not in export_plan.epic.description and "(WBS-2.1)" not in export_plan.epic.description
     assert "interview_checklist" not in export_plan.epic.description
     assert plan["charter"]["objective"] in export_plan.epic.description
-    print("[selftest] description Epic содержит очищенные риски + deliverables (переиспользован Этап 7.5) -- OK")
+    assert plan["charter"]["description"] in export_plan.epic.description
+    print("[selftest] текстовое description Epic содержит charter.description + charter.objective + очищенные риски -- OK")
+
+    # Epic description_adf (реальный ADF при --execute) -- настоящие таблицы,
+    # не markdown-текст с '|' внутри параграфов.
+    adf = export_plan.epic.description_adf
+    assert adf is not None and adf["type"] == "doc"
+    table_nodes = [n for n in adf["content"] if n["type"] == "table"]
+    assert len(table_nodes) == 2, "ожидались ровно 2 таблицы (Риски + Критерии завершения) в ADF Epic"
+    risks_table, criteria_table = table_nodes
+    heading_texts = [n["content"][0]["text"] for n in adf["content"] if n["type"] == "heading"]
+    assert heading_texts == ["Риски проекта", "Критерии завершения этапов"], heading_texts
+
+    def _cell_text(row: dict, col: int) -> str:
+        para = row["content"][col]["content"][0]
+        return para["content"][0]["text"] if para.get("content") else ""
+
+    risk_header = risks_table["content"][0]
+    assert _cell_text(risk_header, 0) == "Риск" and _cell_text(risk_header, 1) == "Затрагивает"
+    assert all(r["content"][0]["type"] == "tableHeader" for r in [risk_header])
+    assert not any("|" in _cell_text(row, 0) for row in risks_table["content"][1:]), "риск не должен содержать '|' -- признак непревращённого markdown"
+
+    criteria_header = criteria_table["content"][0]
+    assert [_cell_text(criteria_header, i) for i in range(3)] == ["ID", "Название", "Описание"]
+    milestone_ids = {m["id"] for m in plan["milestones"]}
+    wbs_ids = {wbs["id"] for m in plan["milestones"] for wbs in m["wbs"]}
+    task_ids_all = {t["id"] for t in flatten_tasks(plan)}
+    row_ids = [_cell_text(row, 0) for row in criteria_table["content"][1:]]
+    assert set(row_ids) == milestone_ids | wbs_ids, (set(row_ids) - (milestone_ids | wbs_ids), (milestone_ids | wbs_ids) - set(row_ids))
+    assert not (set(row_ids) & task_ids_all), "в таблице критериев не должно быть строк Task"
+    print(
+        f"[selftest] description_adf Epic: настоящие ADF-таблицы Риски ({len(risks_table['content']) - 1} строк) "
+        f"и Критерии завершения ({len(milestone_ids)} Milestone + {len(wbs_ids)} WBS, без Task) -- OK"
+    )
 
     # Известная утечка в client-abc.merged-plan.json (Этап 7.6 demo): T-4.2.1.used_by
     # ссылается на исключённую T-4.2.2 -- не должна тихо потеряться, а должна попасть
