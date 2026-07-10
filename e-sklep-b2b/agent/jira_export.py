@@ -871,7 +871,9 @@ def format_dry_run_report(export_plan: ExportPlan, schema: ProjectSchema, projec
     for i in export_plan.issues:
         parent_note = f"  parent={i.parent_placeholder}" if i.parent_placeholder else ""
         sprint_note = f"  sprint={i.sprint_name!r}" if i.sprint_name else ""
-        estimate_note = f"  originalEstimate={i.effort_hours}h" if i.effort_hours is not None else ""
+        estimate_note = (
+            f"  originalEstimate={hours_to_jira_duration(i.effort_hours)!r}" if i.effort_hours is not None else ""
+        )
         lines.append(f"  {i.placeholder_id}  [{i.issue_type_name}]  \"{i.summary}\"  labels={i.labels}{parent_note}{sprint_note}{estimate_note}")
     lines.append("")
 
@@ -879,7 +881,9 @@ def format_dry_run_report(export_plan: ExportPlan, schema: ProjectSchema, projec
         lines.append(f"-- Subtask ({len(export_plan.subtasks)}) --")
         for s in export_plan.subtasks:
             sprint_note = f"  sprint={s.sprint_name!r}" if s.sprint_name else ""
-            estimate_note = f"  originalEstimate={s.effort_hours}h" if s.effort_hours is not None else ""
+            estimate_note = (
+                f"  originalEstimate={hours_to_jira_duration(s.effort_hours)!r}" if s.effort_hours is not None else ""
+            )
             lines.append(f"  {s.placeholder_id}  [{s.issue_type_name}]  \"{s.summary}\"  parent={s.parent_placeholder}  labels={s.labels}{sprint_note}{estimate_note}")
         lines.append("")
 
@@ -948,12 +952,28 @@ def text_to_adf(text: str) -> dict:
     }
 
 
+def hours_to_jira_duration(hours: float) -> str:
+    """Jira timetracking.originalEstimate -- "pretty duration" ("1h 30m"),
+    не принимает дробные единицы вроде "1.5h" (обнаружено на живом TPT:
+    HTTP 400 "Określ prawidłową wartość dla rejestrowania czasu" -- "Specify
+    a valid value for time tracking"). Раскладывает часы на целые h + m
+    (округление до минуты)."""
+    total_minutes = round(hours * 60)
+    h, m = divmod(total_minutes, 60)
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m or not parts:
+        parts.append(f"{m}m")
+    return " ".join(parts)
+
+
 def _timetracking_fields(planned: PlannedIssue) -> dict:
     """originalEstimate из effort_estimates -- только если оно есть в плане
     (WBS-Issue и custom Task без оценки получают {}, а не выдуманное число)."""
     if planned.effort_hours is None:
         return {}
-    return {"timetracking": {"originalEstimate": f"{planned.effort_hours}h"}}
+    return {"timetracking": {"originalEstimate": hours_to_jira_duration(planned.effort_hours)}}
 
 
 class ExecutionNotConfirmed(RuntimeError):
@@ -1299,13 +1319,32 @@ def run_selftest() -> None:
 
     sample_key = key_by_placeholder[sample_task_id]
     sample_fields = created_by_key[sample_key]["fields"]
-    assert sample_fields["timetracking"]["originalEstimate"] == f"{expected_hours}h", sample_fields.get("timetracking")
+    assert sample_fields["timetracking"]["originalEstimate"] == hours_to_jira_duration(expected_hours), (
+        sample_fields.get("timetracking")
+    )
     custom_key = key_by_placeholder["T-4.5-C1"]
     custom_fields = created_by_key[custom_key]["fields"]
     assert "timetracking" not in custom_fields, custom_fields.get("timetracking")
     print(
-        "[selftest] originalEstimate: попадает в fields созданного issue как f'{hours}h', "
-        "отсутствует у Task без effort_estimates -- OK"
+        "[selftest] originalEstimate: попадает в fields созданного issue как pretty duration "
+        "(hours_to_jira_duration), отсутствует у Task без effort_estimates -- OK"
+    )
+
+    # hours_to_jira_duration: Jira не принимает дробные единицы ("1.5h") -- обнаружено
+    # на живом TPT (HTTP 400 "Określ prawidłową wartość dla rejestrowania czasu").
+    assert hours_to_jira_duration(1.5) == "1h 30m"
+    assert hours_to_jira_duration(2.0) == "2h"
+    assert hours_to_jira_duration(0.75) == "45m"
+    assert hours_to_jira_duration(0.5) == "30m"
+    assert hours_to_jira_duration(0.25) == "15m"
+    assert hours_to_jira_duration(10.0) == "10h"
+    assert hours_to_jira_duration(1.25) == "1h 15m"
+    assert "." not in hours_to_jira_duration(1.5) and "." not in hours_to_jira_duration(0.75), (
+        "результат не должен содержать дробных единиц -- именно это отклонил живой TPT"
+    )
+    print(
+        "[selftest] hours_to_jira_duration: дробные часы (1.5, 0.75, 1.25 и т.д.) -- в целые h/m без точки "
+        "(закрывает находку с живого TPT) -- OK"
     )
 
     # --- 6. Подтверждение перед --execute -- никогда не выполняется по умолчанию. ---

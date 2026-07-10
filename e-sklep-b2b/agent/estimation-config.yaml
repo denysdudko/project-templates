@@ -1,0 +1,20 @@
+reference:
+  id: estimation-config
+  name: Параметры генерации сетки спринтов (Этап 5)
+  version: "1.0"
+  scope: >
+    sprint_duration_weeks и team_capacity_per_sprint для build_sprint_plan()
+    в assemble_plan.py -- раньше были захардкожены как константы v1
+    (agent/sprint-mapping-rules.md, раздел "Константы v1"), теперь
+    конфигурируются здесь, без изменения кода.
+  source:
+    type: Internal Project Methodology
+    note: >
+      Comarch не публикует нормативы длительности спринта или capacity
+      команды -- значения по умолчанию основаны на допущении "1 консультант,
+      полная занятость, 5 рабочих дней в неделю" (см. sprint-mapping-rules.md).
+
+sprint_duration_weeks: 2  # длительность одного спринта, недели
+
+team_capacity_per_sprint: 80  # доступная трудоёмкость команды на спринт, часы
+                               # (по умолчанию: 1 консультант * 5 раб. дней * 8 ч/день)
