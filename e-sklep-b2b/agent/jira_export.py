@@ -51,6 +51,15 @@ Sprint (`customfield_...`, обнаруживается через `GET /rest/ap
 `schema.sprint_field_id`, если найден, только показывается в dry-run
 отчёте для консультанта, но не проставляется в issue напрямую.
 
+При `--create-sprints` (opt-in) это ограничение снимается для реально
+созданных Sprint: после `execute_export()` и создания Sprint скрипт
+собирает по `sprint_plan.task_sprint` реальные ключи Issue/Subtask на
+каждый Sprint и привязывает их через `POST /rest/agile/1.0/sprint/{id}/issue`
+(пакетами по `MAX_ISSUES_PER_SPRINT_LINK_BATCH`, лимит Jira Agile API) --
+это устанавливает нативное поле Sprint напрямую, а не только текст в
+description. Без `--create-sprints` поведение не меняется (текст в
+description остаётся единственным способом).
+
 Риски в description Эпика -- настоящая ADF-таблица (`build_risks_adf_table`),
 не markdown-текст: `clean_business_text()` и сбор `related_wbs` -> имена
 переиспользуются из `generate_client_document.py` (Этап 7.5) как есть, но
@@ -381,6 +390,16 @@ class JiraClient:
             body["goal"] = goal
         return self._request("POST", "/rest/agile/1.0/sprint", body)
 
+    def add_issues_to_sprint(self, sprint_id: int, issue_keys: list[str]) -> None:
+        """Привязка issue к спринту (POST /rest/agile/1.0/sprint/{id}/issue,
+        не более MAX_ISSUES_PER_SPRINT_LINK_BATCH ключей за вызов -- лимит
+        Jira Agile API; батчинг делает вызывающий код). В отличие от
+        create_issue/create_issue_link, эта операция идемпотентна на стороне
+        Jira -- повторное добавление уже привязанного issue не создаёт
+        дубля, только переустанавливает то же членство в спринте, поэтому
+        retry в _request() здесь безопасен без дополнительных оговорок."""
+        self._request("POST", f"/rest/agile/1.0/sprint/{sprint_id}/issue", {"issues": issue_keys})
+
 
 class FakeJiraClient:
     """Для --selftest и разработки без живого Jira-проекта -- те же методы,
@@ -400,6 +419,7 @@ class FakeJiraClient:
         self.created_issues: list[dict] = []
         self.created_links: list[tuple[str, str, str]] = []
         self.created_sprints: list[dict] = []
+        self.sprint_issue_batches: list[tuple[int, list[str]]] = []
         self._next_num = 1
         self._next_sprint_id = 1
 
@@ -439,6 +459,9 @@ class FakeJiraClient:
         self._next_sprint_id += 1
         self.created_sprints.append(sprint)
         return sprint
+
+    def add_issues_to_sprint(self, sprint_id: int, issue_keys: list[str]) -> None:
+        self.sprint_issue_batches.append((sprint_id, list(issue_keys)))
 
 
 class _FakeResponse:
@@ -521,6 +544,7 @@ class ExportPlan:
 
 @dataclass
 class PlannedSprint:
+    number: int  # sprint_plan.sprints[].sprint -- матчит sprint_plan.task_sprint с реальным Sprint id после создания
     name: str  # короткое имя для поля Jira `name` (лимит API -- см. JIRA_SPRINT_NAME_MAX_LENGTH)
     goal: str  # полное имя из sprint_plan.sprints[].name (с датами), без изменений -- в поле Jira `goal`
     start_date: str  # YYYY-MM-DD
@@ -559,8 +583,30 @@ def build_planned_sprints(plan: dict) -> list[PlannedSprint]:
                 f"Короткое имя Sprint {short_name!r} ({len(short_name)} симв.) всё равно превышает лимит "
                 f"Jira ({JIRA_SPRINT_NAME_MAX_LENGTH}) -- нужна ручная правка меток в плане, не автоматическая обрезка"
             )
-        planned.append(PlannedSprint(name=short_name, goal=full_name, start_date=start_date, end_date=end_date))
+        planned.append(
+            PlannedSprint(
+                number=s["sprint"], name=short_name, goal=full_name, start_date=start_date, end_date=end_date
+            )
+        )
     return planned
+
+
+MAX_ISSUES_PER_SPRINT_LINK_BATCH = 50  # лимит Jira Agile API за один вызов POST /sprint/{id}/issue
+
+
+def build_sprint_task_ids(plan: dict) -> dict[int, list[str]]:
+    """sprint_plan.task_sprint (task_id -> sprint_number) сгруппирован в
+    обратную сторону (sprint_number -> [task_id, ...]) -- используется и для
+    dry-run превью, и для реальной привязки после создания issues/спринтов."""
+    grouped: dict[int, list[str]] = {}
+    for task_id, sprint_number in plan.get("sprint_plan", {}).get("task_sprint", {}).items():
+        grouped.setdefault(sprint_number, []).append(task_id)
+    return grouped
+
+
+def chunked(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
 
 
 def render_criteria_text(plan: dict) -> str:
@@ -901,7 +947,12 @@ def format_dry_run_report(export_plan: ExportPlan, schema: ProjectSchema, projec
     return "\n".join(lines).rstrip() + "\n"
 
 
-def format_sprint_dry_run_report(planned_sprints: list[PlannedSprint], board: dict, project_key: str) -> str:
+def format_sprint_dry_run_report(
+    planned_sprints: list[PlannedSprint],
+    board: dict,
+    project_key: str,
+    sprint_task_ids: dict[int, list[str]],
+) -> str:
     lines = ["=== --create-sprints -- DRY-RUN, вызовов на запись не было ===", ""]
     lines.append(f"Проект: {project_key}")
     lines.append(f"Доска с Sprint: {board.get('name')!r} (id={board.get('id')}, type={board.get('type')!r})")
@@ -913,9 +964,18 @@ def format_sprint_dry_run_report(planned_sprints: list[PlannedSprint], board: di
         )
     lines.append("")
     lines.append(
-        "Привязка Issue/Subtask к созданным Sprint НЕ выполняется -- имя спринта остаётся "
-        "строкой в description ('Sprint: ...'), как и раньше; консультант проставляет "
-        "нативное поле Sprint вручную после создания."
+        "Было бы привязано к Sprint после реального создания -- "
+        f"POST /rest/agile/1.0/sprint/{{id}}/issue, пакетами <={MAX_ISSUES_PER_SPRINT_LINK_BATCH} issue:"
+    )
+    for sp in planned_sprints:
+        task_ids = sprint_task_ids.get(sp.number, [])
+        n_batches = len(list(chunked(task_ids, MAX_ISSUES_PER_SPRINT_LINK_BATCH)))
+        lines.append(f"  {sp.name}  ({len(task_ids)} задач, {n_batches} батч(ей)): {', '.join(task_ids)}")
+    lines.append("")
+    lines.append(
+        "Нативное поле Jira Sprint (customfield_...) проставляется этой привязкой; имя спринта "
+        "остаётся также первой строкой в description Issue/Subtask (человекочитаемо, дублирует "
+        "нативное поле, не заменяет его)."
     )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1088,6 +1148,39 @@ def execute_export(
         log(f"Создана связь [{lnk.link_type}]: {outward_key} -> {inward_key}")
 
     return key_by_placeholder
+
+
+def link_issues_to_sprints(
+    client,
+    planned_sprints: list[PlannedSprint],
+    sprint_task_ids: dict[int, list[str]],
+    key_by_placeholder: dict[str, str],
+    real_sprint_id_by_number: dict[int, int],
+    verbose: bool = True,
+) -> None:
+    """Привязывает реально созданные Issue/Subtask к реально созданным Sprint
+    -- только после того, как оба существуют (--execute + --create-sprints).
+    Task, для которых в sprint_task_ids есть номер спринта, но нет ключа в
+    key_by_placeholder (issue не создан), не привязываются молча -- это
+    печатается явно, тем же паттерном, что skipped_links в execute_export."""
+
+    def log(msg: str) -> None:
+        if verbose:
+            print(msg)
+
+    for sp in planned_sprints:
+        task_ids = sprint_task_ids.get(sp.number, [])
+        issue_keys = []
+        for task_id in task_ids:
+            key = key_by_placeholder.get(task_id)
+            if key is None:
+                log(f"  ! Пропущена привязка {task_id} к Sprint {sp.name!r}: issue не создан")
+                continue
+            issue_keys.append(key)
+        real_sprint_id = real_sprint_id_by_number[sp.number]
+        for batch in chunked(issue_keys, MAX_ISSUES_PER_SPRINT_LINK_BATCH):
+            client.add_issues_to_sprint(real_sprint_id, batch)
+            log(f"Привязано к Sprint {sp.name!r} (id={real_sprint_id}): {len(batch)} issue")
 
 
 # ---------------------------------------------------------------------------
@@ -1471,13 +1564,71 @@ def run_selftest() -> None:
     )
     print(
         f"[selftest] create_sprint (FakeJiraClient): {len(fake_sprints.created_sprints)} Sprint создано, "
-        f"имена совпадают с планом без изменений, привязка Issue/Subtask не производится -- OK"
+        f"имена совпадают с планом без изменений -- OK (привязка -- отдельный вызов link_issues_to_sprints, ниже)"
     )
 
-    sprint_report = format_sprint_dry_run_report(planned_sprints, board_found, project_key="TPT")
+    sprint_task_ids = build_sprint_task_ids(plan)
+    assert set(sprint_task_ids) == {sp.number for sp in planned_sprints}, (
+        set(sprint_task_ids), {sp.number for sp in planned_sprints}
+    )
+    all_task_ids_in_plan = {t["id"] for t in flatten_tasks(plan)}
+    all_task_ids_grouped = {tid for ids in sprint_task_ids.values() for tid in ids}
+    assert all_task_ids_grouped == all_task_ids_in_plan, (
+        all_task_ids_in_plan - all_task_ids_grouped, all_task_ids_grouped - all_task_ids_in_plan
+    )
+    print(
+        f"[selftest] build_sprint_task_ids: {sum(len(v) for v in sprint_task_ids.values())} задач сгруппировано "
+        f"по {len(sprint_task_ids)} спринтам, покрывает все Task плана -- OK"
+    )
+
+    assert list(chunked([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
+    assert list(chunked([], 50)) == []
+    big_batch = list(range(120))
+    chunks = list(chunked(big_batch, MAX_ISSUES_PER_SPRINT_LINK_BATCH))
+    assert [len(c) for c in chunks] == [50, 50, 20], [len(c) for c in chunks]
+    assert sum(chunks, []) == big_batch
+    print(
+        f"[selftest] chunked: режет на батчи по <={MAX_ISSUES_PER_SPRINT_LINK_BATCH}, "
+        "без потери и дублирования элементов -- OK"
+    )
+
+    sprint_report = format_sprint_dry_run_report(planned_sprints, board_found, project_key="TPT", sprint_task_ids=sprint_task_ids)
     assert "DRY-RUN" in sprint_report
     assert f"{len(planned_sprints)} Sprint" in sprint_report
-    print("[selftest] --create-sprints dry-run отчёт формируется без ошибок -- OK")
+    assert "POST /rest/agile/1.0/sprint/{id}/issue" in sprint_report
+    for sp in planned_sprints:
+        assert f"{len(sprint_task_ids.get(sp.number, []))} задач" in sprint_report, sp.name
+    print(
+        "[selftest] --create-sprints dry-run отчёт: показывает превью привязки (без POST) -- OK"
+    )
+
+    # link_issues_to_sprints: реально созданные Issue/Subtask -> реально созданные Sprint,
+    # батчами <=MAX_ISSUES_PER_SPRINT_LINK_BATCH; пропавший ключ не привязывается молча.
+    fake_link_client = FakeJiraClient(_company_managed_issue_types())
+    real_sprint_id_by_number = {sp.number: 1000 + sp.number for sp in planned_sprints}
+    key_by_placeholder_for_link = dict(key_by_placeholder)  # из шага 5 (execute через FakeJiraClient)
+    missing_task_id = next(iter(sprint_task_ids[1]))
+    del key_by_placeholder_for_link[missing_task_id]  # симулирует issue, который не создался
+    link_issues_to_sprints(
+        fake_link_client, planned_sprints, sprint_task_ids, key_by_placeholder_for_link, real_sprint_id_by_number,
+        verbose=False,
+    )
+    linked_by_sprint: dict[int, list[str]] = {}
+    for sprint_id, keys in fake_link_client.sprint_issue_batches:
+        linked_by_sprint.setdefault(sprint_id, []).extend(keys)
+        assert len(keys) <= MAX_ISSUES_PER_SPRINT_LINK_BATCH, keys
+    total_linked = sum(len(v) for v in linked_by_sprint.values())
+    total_expected = sum(len(v) for v in sprint_task_ids.values()) - 1  # минус пропавший ключ
+    assert total_linked == total_expected, (total_linked, total_expected)
+    sprint1_id = real_sprint_id_by_number[1]
+    assert missing_task_id not in [
+        key_by_placeholder_for_link.get(t) for t in sprint_task_ids[1]
+    ], "пропавший task не должен попасть в привязку"
+    assert sprint1_id in linked_by_sprint, "спринт 1 должен получить хотя бы одну привязку"
+    print(
+        f"[selftest] link_issues_to_sprints: {total_linked} issue привязано батчами (макс. "
+        f"{MAX_ISSUES_PER_SPRINT_LINK_BATCH}), issue без ключа пропущен явно, не молча -- OK"
+    )
 
     # board_supports_sprints реального JiraClient -- различает "не поддерживает" (400 с
     # конкретным текстом) от прочих ошибок (не проглатывается как False молча).
@@ -1597,6 +1748,7 @@ def main() -> None:
 
     planned_sprints: list[PlannedSprint] = []
     board: dict | None = None
+    sprint_task_ids: dict[int, list[str]] = {}
     if args.create_sprints:
         if client is None:
             parser.error(
@@ -1610,11 +1762,14 @@ def main() -> None:
             print(f"ОСТАНОВЛЕНО: {exc}", file=sys.stderr)
             sys.exit(2)
         planned_sprints = build_planned_sprints(plan)
+        sprint_task_ids = build_sprint_task_ids(plan)
 
     if not args.execute:
         report_text = format_dry_run_report(export_plan, schema, args.project_key or "(из --schema-fixture)")
         if args.create_sprints:
-            report_text += "\n" + format_sprint_dry_run_report(planned_sprints, board, args.project_key)
+            report_text += "\n" + format_sprint_dry_run_report(
+                planned_sprints, board, args.project_key, sprint_task_ids
+            )
         if args.output:
             args.output.write_text(report_text, encoding="utf-8")
             print(f"Записано: {args.output}", file=sys.stderr)
@@ -1633,14 +1788,18 @@ def main() -> None:
 
     state_path = args.state_file or args.plan.with_name(args.plan.stem + ".jira-export-state.json")
     print(f"key_by_placeholder пишется по ходу создания в: {state_path}", file=sys.stderr)
-    execute_export(client, export_plan, args.project_key, state_path=state_path)
+    key_by_placeholder = execute_export(client, export_plan, args.project_key, state_path=state_path)
 
     if args.create_sprints:
+        real_sprint_id_by_number: dict[int, int] = {}
         for sp in planned_sprints:
             created = client.create_sprint(
                 board["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
             )
+            real_sprint_id_by_number[sp.number] = created["id"]
             print(f"Создан Sprint: {created.get('id')}  {sp.name}  (goal={sp.goal!r})")
+
+        link_issues_to_sprints(client, planned_sprints, sprint_task_ids, key_by_placeholder, real_sprint_id_by_number)
 
 
 if __name__ == "__main__":
