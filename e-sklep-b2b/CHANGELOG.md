@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20 — Jira-экспорт: description в ADF-формате (фикс Этапа 8)
+- Найдено при первом реальном запуске `--execute` против живого Jira Cloud-проекта (не в `--selftest`, который шёл только через `FakeJiraClient`): Jira Cloud REST API v3 отклоняет `description` как обычную строку (`HTTP 400 — "Wartość pola nie jest prawidłową treścią Atlassian Document Format (ADF)"`), требуется Atlassian Document Format.
+- Добавлена `text_to_adf()` — оборачивает текст в `{"type": "doc", "version": 1, "content": [...]}`, каждая строка исходного текста -> отдельный параграф (`{"type": "paragraph", "content": [{"type": "text", "text": line}]}`), пустая строка -> пустой параграф (пропуски в исходном тексте не схлопываются). `execute_export()` теперь передаёт через неё `description` для Epic/Issue/Subtask вместо голой строки.
+- Известное ограничение (не скрыто): risk-таблица Epic (Markdown-таблица из `render_risks()`, Этап 7.5) не разбирается в настоящую ADF-таблицу — остаётся построчным текстом с `|` внутри параграфов, читаемым, но без табличного форматирования в Jira. Полноценный Markdown→ADF-парсер (в т.ч. ADF-таблицы) — отдельная, более объёмная задача, если понадобится табличный вид; не реализован в этом проходе.
+- `--selftest`: добавлена прямая проверка `text_to_adf()` на многострочном input (в т.ч. пустые строки и фрагмент risk-таблицы — подтверждает построчное сохранение без потери содержимого); проверка Sprint-в-description для `execute()`-ветки обновлена под ADF-структуру вместо голой строки.
+- `resolve_issue_types()`: issuetype Epic теперь распознаётся и по локализованному имени `Epik` (польская локализация Jira, обнаружено на живом проекте TPT), не только по `Epic`.
+- `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.19 — Jira-экспорт (Этап 8)
 - Добавлен `agent/jira_export.py` — экспорт смерженного и провалидированного плана (Этап 7.6) в уже существующий Jira-проект (проект не создаётся). Весь план -> 1 Epic; Milestone -> Label на каждой Issue/Subtask; WBS -> Issue, child Epic; Task -> Subtask под WBS-Issue (`description` = Interview/Verification checklist, Sprint = имя спринта); `depends_on`/`used_by` -> Issue Link `Blocks`; Риски/Deliverables -> секции текста в `description` Epic.
 - Обязательное предусловие: перед маппингом скрипт запрашивает у целевого проекта реальные issuetypes (`GET /rest/api/3/project/{key}`) и подтверждает доступность Subtask. Если Subtask недоступен (team-managed проект) — не выбирает обходной путь молча, а останавливается явной ошибкой (`SubtaskUnavailableError`) с объяснением; плоская структура (WBS и Task — оба Issue, связаны Issue Link `Relates` по умолчанию) включается только по явному `--allow-flat-fallback`.
