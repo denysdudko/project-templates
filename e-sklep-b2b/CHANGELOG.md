@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.23 — Jira-экспорт: короткое имя Sprint (лимит Jira 30 символов)
+- Найдено на реальном создании 6 Sprint в TPT (первая попытка после v1.22): `POST /rest/agile/1.0/sprint` отклонён с `HTTP 400: "Długość nazwy sprintu musi być mniejsza niż 30 zn."` (имя Sprint должно быть короче 30 символов) — полное имя из плана (например, `"Спринт 1 (2026-08-03–2026-08-16)"`, 33 символа) в это не укладывается. Ни один Sprint создан не был (упало на первой же попытке).
+- `PlannedSprint`: разделены `name` (короткое, `"Спринт N"` + метка вроде "Гиперподдержка", если есть — все 6 укладываются в лимит) и `goal` (полное имя из плана с датами, без изменений). В Jira `name` идёт короткая форма (обязательное поле API), `goal` — полное имя из плана (необязательное поле, лимитом не ограничено).
+- `parse_sprint_dates_and_label()` (переименована из `parse_sprint_dates`) дополнительно извлекает метку (например, "Гиперподдержка") из уже готового имени — не по отдельному полю плана (такого нет), а из той же строки, что и раньше давала даты.
+- `create_sprint()` (JiraClient и FakeJiraClient) — новый опциональный параметр `goal`; dry-run отчёт показывает оба значения (`name=... goal=...`) для каждого Sprint.
+- `--selftest`: короткое `name` укладывается в лимит для всех 6 спринтов плана (в т.ч. с меткой "Гиперподдержка"), `goal` совпадает с полным именем из плана без изменений, `create_sprint` (FakeJiraClient) сохраняет оба поля.
+- Маппинг Epic/Issue/Subtask/Link, timetracking, retry-механизм не менялись — точечный фикс формата имени Sprint.
+- `docs/principles.md`, `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.22 — Jira-экспорт: timetracking + опциональное создание Sprint (фикс Этапа 8)
 - **Time tracking**: `execute_export()` проставляет `timetracking.originalEstimate` (формат `f"{hours}h"`) у Issue/Subtask, если для соответствующей Task в плане есть `effort_estimates[task_id].hours`. WBS-Issue (агрегированной оценки на уровне WBS в плане нет) и custom Task без записи в `effort_estimates` (например, `T-4.5-C1` из Этапа 7.6) timetracking не получают — не выдумывается. Dry-run отчёт показывает `originalEstimate` рядом с каждой Task/Subtask, как уже показываются `labels`/`sprint`.
 - **`--create-sprints`** (opt-in, по умолчанию выключен): создаёт Sprint на доске проекта из `sprint_plan.sprints[]` через Agile REST API (`GET /rest/agile/1.0/board`, `POST /rest/agile/1.0/sprint`) — имя спринта берётся из плана без изменений, даты извлекаются из уже готового имени (`assemble_plan.py: sprint_name()`, не пересчитываются заново). Без привязки Issue/Subtask к созданным спринтам — `customfield_...` Sprint не трогается, имя спринта остаётся строкой в description, как и раньше; привязку делает консультант вручную. Dry-run печатает то же самое (GET доски + список спринтов с датами) без единого POST.

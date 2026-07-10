@@ -357,14 +357,15 @@ class JiraClient:
                 return False
             raise
 
-    def create_sprint(self, board_id: int, name: str, start_date_iso: str, end_date_iso: str) -> dict:
+    def create_sprint(
+        self, board_id: int, name: str, start_date_iso: str, end_date_iso: str, goal: str | None = None
+    ) -> dict:
         """Тот же риск дубля при retry после обрыва соединения, что и в
         create_issue выше -- см. комментарий там."""
-        return self._request(
-            "POST",
-            "/rest/agile/1.0/sprint",
-            {"name": name, "startDate": start_date_iso, "endDate": end_date_iso, "originBoardId": board_id},
-        )
+        body = {"name": name, "startDate": start_date_iso, "endDate": end_date_iso, "originBoardId": board_id}
+        if goal:
+            body["goal"] = goal
+        return self._request("POST", "/rest/agile/1.0/sprint", body)
 
 
 class FakeJiraClient:
@@ -409,7 +410,9 @@ class FakeJiraClient:
     def board_supports_sprints(self, board_id: int) -> bool:
         return board_id in self._sprint_capable_board_ids
 
-    def create_sprint(self, board_id: int, name: str, start_date_iso: str, end_date_iso: str) -> dict:
+    def create_sprint(
+        self, board_id: int, name: str, start_date_iso: str, end_date_iso: str, goal: str | None = None
+    ) -> dict:
         sprint = {
             "id": self._next_sprint_id,
             "originBoardId": board_id,
@@ -417,6 +420,8 @@ class FakeJiraClient:
             "startDate": start_date_iso,
             "endDate": end_date_iso,
         }
+        if goal:
+            sprint["goal"] = goal
         self._next_sprint_id += 1
         self.created_sprints.append(sprint)
         return sprint
@@ -499,30 +504,45 @@ class ExportPlan:
 
 @dataclass
 class PlannedSprint:
-    name: str  # уже готовое имя из sprint_plan.sprints[].name, без изменений
+    name: str  # короткое имя для поля Jira `name` (лимит API -- см. JIRA_SPRINT_NAME_MAX_LENGTH)
+    goal: str  # полное имя из sprint_plan.sprints[].name (с датами), без изменений -- в поле Jira `goal`
     start_date: str  # YYYY-MM-DD
     end_date: str  # YYYY-MM-DD
 
 
-SPRINT_NAME_DATE_RANGE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})–(\d{4}-\d{2}-\d{2})(?:, [^)]+)?\)")
+SPRINT_NAME_DATE_RANGE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})–(\d{4}-\d{2}-\d{2})(?:, ([^)]+))?\)")
+
+JIRA_SPRINT_NAME_MAX_LENGTH = 30  # обнаружено на живом TPT: HTTP 400 "Długość nazwy sprintu musi być mniejsza niż 30 zn."
 
 
-def parse_sprint_dates(sprint_name: str) -> tuple[str, str]:
-    """Извлекает даты начала/конца из уже готового имени спринта
-    (agent/assemble_plan.py, sprint_name(): "Спринт N (start–end[, метка])")
-    -- не пересчитывает их заново из sprint_length_weeks/start_date, чтобы
-    не разойтись с тем, что уже зафиксировано в плане."""
+def parse_sprint_dates_and_label(sprint_name: str) -> tuple[str, str, str | None]:
+    """Извлекает даты начала/конца (и опциональную метку вроде "Гиперподдержка")
+    из уже готового имени спринта (agent/assemble_plan.py, sprint_name():
+    "Спринт N (start–end[, метка])") -- не пересчитывает их заново из
+    sprint_length_weeks/start_date, чтобы не разойтись с тем, что уже
+    зафиксировано в плане."""
     m = SPRINT_NAME_DATE_RANGE_RE.search(sprint_name)
     if not m:
         raise JiraApiError(f"Не удалось извлечь даты спринта из имени {sprint_name!r} -- неожиданный формат")
-    return m.group(1), m.group(2)
+    return m.group(1), m.group(2), m.group(3)
 
 
 def build_planned_sprints(plan: dict) -> list[PlannedSprint]:
+    """Полное имя из плана (с датами) идёт в Jira `goal` без изменений --
+    Jira `name` спринта ограничен JIRA_SPRINT_NAME_MAX_LENGTH символами
+    (обнаружено на живом TPT: полное имя с датами это нарушает), поэтому
+    для `name` строится короткая форма "Спринт N" (+ метка, если есть)."""
     planned = []
     for s in plan.get("sprint_plan", {}).get("sprints", []):
-        start_date, end_date = parse_sprint_dates(s["name"])
-        planned.append(PlannedSprint(name=s["name"], start_date=start_date, end_date=end_date))
+        full_name = s["name"]
+        start_date, end_date, label = parse_sprint_dates_and_label(full_name)
+        short_name = f"Спринт {s['sprint']}" + (f" ({label})" if label else "")
+        if len(short_name) > JIRA_SPRINT_NAME_MAX_LENGTH:
+            raise JiraApiError(
+                f"Короткое имя Sprint {short_name!r} ({len(short_name)} симв.) всё равно превышает лимит "
+                f"Jira ({JIRA_SPRINT_NAME_MAX_LENGTH}) -- нужна ручная правка меток в плане, не автоматическая обрезка"
+            )
+        planned.append(PlannedSprint(name=short_name, goal=full_name, start_date=start_date, end_date=end_date))
     return planned
 
 
@@ -750,7 +770,9 @@ def format_sprint_dry_run_report(planned_sprints: list[PlannedSprint], board: di
     lines.append("")
     lines.append(f"Было бы создано: {len(planned_sprints)} Sprint")
     for sp in planned_sprints:
-        lines.append(f"  {sp.name}  (startDate={sp.start_date}, endDate={sp.end_date})")
+        lines.append(
+            f"  name={sp.name!r}  goal={sp.goal!r}  (startDate={sp.start_date}, endDate={sp.end_date})"
+        )
     lines.append("")
     lines.append(
         "Привязка Issue/Subtask к созданным Sprint НЕ выполняется -- имя спринта остаётся "
@@ -1172,17 +1194,23 @@ def run_selftest() -> None:
     # --- 8. --create-sprints (opt-in): парсинг дат, поиск Scrum-доски, создание Sprint. ---
     planned_sprints = build_planned_sprints(plan)
     assert len(planned_sprints) == len(plan["sprint_plan"]["sprints"])
-    assert planned_sprints[0].name == plan["sprint_plan"]["sprints"][0]["name"], (
-        "имя Sprint должно браться из плана без изменений"
+    assert planned_sprints[0].goal == plan["sprint_plan"]["sprints"][0]["name"], (
+        "goal должен содержать полное имя из плана без изменений"
+    )
+    assert planned_sprints[0].name == "Спринт 1", planned_sprints[0].name
+    assert all(len(sp.name) <= JIRA_SPRINT_NAME_MAX_LENGTH for sp in planned_sprints), (
+        "короткое name не должно превышать лимит Jira -- обнаружено на живом TPT (HTTP 400 при полном имени)",
+        [(sp.name, len(sp.name)) for sp in planned_sprints],
     )
     assert planned_sprints[0].start_date == "2026-08-03" and planned_sprints[0].end_date == "2026-08-16", (
         planned_sprints[0]
     )
     hypercare_sprint = next(sp for sp in planned_sprints if "Гиперподдержка" in sp.name)
     assert hypercare_sprint.start_date and hypercare_sprint.end_date, "метка в имени не должна ломать разбор дат"
+    assert "Гиперподдержка" in hypercare_sprint.goal, "метка должна остаться и в полном goal"
     print(
-        f"[selftest] build_planned_sprints: {len(planned_sprints)} спринтов, имя без изменений, "
-        f"даты распознаются из плана (в т.ч. с меткой Гиперподдержка) -- OK"
+        f"[selftest] build_planned_sprints: {len(planned_sprints)} спринтов, короткое name (<={JIRA_SPRINT_NAME_MAX_LENGTH} "
+        f"симв., с меткой Гиперподдержка где есть) + полное goal без изменений, даты распознаются из плана -- OK"
     )
 
     # "simple"-доска, которая реально поддерживает Sprint -- воспроизводит находку
@@ -1224,11 +1252,14 @@ def run_selftest() -> None:
 
     for sp in planned_sprints:
         fake_sprints.create_sprint(
-            board_found["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z"
+            board_found["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
         )
     assert len(fake_sprints.created_sprints) == len(planned_sprints)
     assert all(c["name"] == sp.name for c, sp in zip(fake_sprints.created_sprints, planned_sprints)), (
-        "имя созданного Sprint должно совпадать с планом без изменений"
+        "name созданного Sprint должен совпадать с коротким name из плана"
+    )
+    assert all(c["goal"] == sp.goal for c, sp in zip(fake_sprints.created_sprints, planned_sprints)), (
+        "goal созданного Sprint должен совпадать с полным именем из плана без изменений"
     )
     print(
         f"[selftest] create_sprint (FakeJiraClient): {len(fake_sprints.created_sprints)} Sprint создано, "
@@ -1399,9 +1430,9 @@ def main() -> None:
     if args.create_sprints:
         for sp in planned_sprints:
             created = client.create_sprint(
-                board["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z"
+                board["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
             )
-            print(f"Создан Sprint: {created.get('id')}  {sp.name}")
+            print(f"Создан Sprint: {created.get('id')}  {sp.name}  (goal={sp.goal!r})")
 
 
 if __name__ == "__main__":
