@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.25 — Jira-экспорт: originalEstimate в целых h/m (Jira не принимает дробные единицы)
+- Найдено на реальном `--execute` против TPT (первый прогон с timetracking из v1.22): Epic + 39 WBS-Issue создались чисто, но первая же Subtask (T-1.1.1, `effort_hours=1.5`) упала — `HTTP 400: {"timetracking":"Określ prawidłową wartość dla rejestrowania czasu"}` ("Specify a valid value for time tracking"). Причина: Jira `timetracking.originalEstimate` — "pretty duration" (`"1h 30m"`), не принимает дробные единицы вроде `"1.5h"`, которые писал `f"{hours}h"`.
+- Добавлена `hours_to_jira_duration()` — раскладывает дробные часы на целые `h`+`m` (округление до минуты): `1.5 → "1h 30m"`, `0.75 → "45m"`, `10.0 → "10h"`. `_timetracking_fields()` и dry-run отчёт используют её вместо голого `f"{hours}h"`.
+- `--selftest`: `hours_to_jira_duration()` проверена на характерных значениях плана (1.5/0.75/0.5/0.25/1.25/10.0 часов), результат не должен содержать точки — именно дробный формат отклонил живой TPT.
+- Маппинг Epic/Issue/Subtask/Link и ADF-таблицы (v1.24) не менялись — точечный фикс формата длительности.
+- `docs/principles.md`, `schema/milestones_wbs.yaml` и `tasks/M*_tasks.yaml` не изменялись.
+
 ## v1.24 — Jira-экспорт: description Эпика — настоящие ADF-таблицы, отдельный блок "Описание"
 - `description` Эпика при `--execute` теперь строится напрямую как ADF (`build_epic_description_adf`, поле `PlannedIssue.description_adf`), а не через построчный `text_to_adf()` — закрывает известное ограничение из v1.19 (markdown-таблица рисков оставалась построчным текстом с `|`, не настоящей ADF-таблицей).
 - Добавлен отдельный блок "Описание" (из `charter.description` = `project.description` в `schema/milestones_wbs.yaml`, отдельно от уже существующего "Цель" = `charter.objective`/`project.objective`).
