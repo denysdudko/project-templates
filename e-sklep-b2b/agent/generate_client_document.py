@@ -304,14 +304,13 @@ def render_risks(plan: dict, id_to_name: dict[str, str]) -> str:
 def render_summary(plan: dict) -> str:
     sp = plan.get("sprint_plan", {})
     total_sprints_used = sp.get("total_sprints_used")
-    available_sprints = sp.get("available_sprints")
-    sprint_weeks = sp.get("sprint_length_weeks")
+    weeks_used_until_launch = sp.get("weeks_used_until_launch")
+    available_weeks = sp.get("available_weeks")
     all_sprints = len(sp.get("sprints") or [])
-    duration_weeks = (total_sprints_used or 0) * (sprint_weeks or 0)
 
     lines = ["## Итоговая сводка", ""]
-    lines.append(f"- Спринтов до запуска: {total_sprints_used} из {available_sprints} доступных")
-    lines.append(f"- Длительность до запуска: {duration_weeks} нед. (спринт = {sprint_weeks} нед.)")
+    lines.append(f"- Спринтов до запуска: {total_sprints_used}")
+    lines.append(f"- Длительность до запуска: {weeks_used_until_launch} нед. из {available_weeks} нед. доступных")
     lines.append(
         f"- Всего спринтов в плане, включая гиперподдержку и завершение проекта после запуска: {all_sprints}"
     )
@@ -453,7 +452,8 @@ def run_selftest() -> None:
     # Сводка содержит числа спринтов.
     sp = plan["sprint_plan"]
     assert str(sp["total_sprints_used"]) in doc
-    assert str(sp["available_sprints"]) in doc
+    assert str(sp["weeks_used_until_launch"]) in doc
+    assert str(sp["available_weeks"]) in doc
     print("[selftest] итоговая сводка содержит числа спринтов -- OK")
 
     # Ветка с warning: план с дефицитом времени должен показать предупреждение.

@@ -456,28 +456,65 @@ def topological_order(task_ids: list[str], depends_on: dict[str, list[str]]) -> 
 
 
 # ---------------------------------------------------------------------------
-# Именование спринтов -- вычисляется из start_date + sprint_length_weeks,
-# без нового поля во входной схеме (agent/sprint-mapping-rules.md,
-# раздел "Именование спринтов").
+# Упаковка в спринты (agent/sprint-mapping-rules.md, Этап 5, v2 алгоритма).
+# Единица упаковки -- WBS целиком (сумма часов всех его Task), не отдельная
+# Task. Длительность спринта переменная: ceil(часы/недельная нагрузка), а
+# не фиксированный грид по sprint_duration_weeks -- см. sprint_duration_weeks_for.
+# WBS-9.3/9.4 (гиперподдержка/завершение) остаются Task-level, как в v1 --
+# см. "После запуска" ниже.
 # ---------------------------------------------------------------------------
 
+WEEKLY_CAPACITY_HOURS = CAPACITY_PER_SPRINT_HOURS / SPRINT_LENGTH_WEEKS  # 40ч/неделя при значениях по умолчанию
 
-def sprint_date_range(sprint_number: int, start_date: date) -> tuple[date, date]:
-    sprint_start = start_date + timedelta(weeks=(sprint_number - 1) * SPRINT_LENGTH_WEEKS)
-    sprint_end = sprint_start + timedelta(weeks=SPRINT_LENGTH_WEEKS) - timedelta(days=1)
-    return sprint_start, sprint_end
+POST_LAUNCH_WBS_IDS = {"WBS-9.3", "WBS-9.4"}  # не участвуют в WBS-упаковке -- см. build_sprint_plan
 
 
-def sprint_name(sprint_number: int, start_date: date, label: str | None = None) -> str:
-    s, e = sprint_date_range(sprint_number, start_date)
-    base = f"Спринт {sprint_number} ({s.isoformat()}–{e.isoformat()})"
+def wbs_task_ids_by_wbs(milestones: list[dict]) -> dict[str, list[str]]:
+    """wbs_id -> [task_id, ...] в порядке шаблона (Milestone -> WBS -> Task) --
+    порядок словаря используется как тай-брейк для WBS-уровневой топосортировки."""
+    return {wbs["id"]: [t["id"] for t in wbs["tasks"]] for m in milestones for wbs in m["wbs"]}
+
+
+def build_wbs_dependencies(
+    wbs_tasks: dict[str, list[str]], depends_on: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """WBS A -> [WBS B, ...], если хоть одна Task из A имеет depends_on на
+    Task из B (B != A) -- зависимости внутри одного WBS не считаются
+    межблочными и не создают самозависимость."""
+    task_to_wbs = {tid: wbs_id for wbs_id, tids in wbs_tasks.items() for tid in tids}
+    wbs_deps: dict[str, set[str]] = {wbs_id: set() for wbs_id in wbs_tasks}
+    for wbs_id, tids in wbs_tasks.items():
+        for tid in tids:
+            for dep_tid in depends_on.get(tid, []):
+                dep_wbs = task_to_wbs.get(dep_tid)
+                if dep_wbs is not None and dep_wbs != wbs_id:
+                    wbs_deps[wbs_id].add(dep_wbs)
+    return {wbs_id: sorted(deps) for wbs_id, deps in wbs_deps.items()}
+
+
+def sprint_duration_weeks_for(hours_used: float) -> int:
+    """Длительность спринта = ceil(часы_в_спринте / недельная нагрузка) --
+    не фиксированный грид. Чисто резервный спринт без обычных задач
+    (hours_used == 0 -- например, спринт только под T-9.3.2) получает
+    номинальную sprint_duration_weeks: формула ceil(0/X)=0 недель для
+    календаря бессмысленна, а длительность периода гиперподдержки как
+    таковая этим правилом не выводится из трудозатрат."""
+    if hours_used <= 0:
+        return SPRINT_LENGTH_WEEKS
+    return math.ceil(hours_used / WEEKLY_CAPACITY_HOURS)
+
+
+def sprint_name(sprint_number: int, start: date, end: date, label: str | None = None) -> str:
+    base = f"Спринт {sprint_number} ({start.isoformat()}–{end.isoformat()})"
     if label:
-        return f"Спринт {sprint_number} ({s.isoformat()}–{e.isoformat()}, {label})"
+        return f"Спринт {sprint_number} ({start.isoformat()}–{end.isoformat()}, {label})"
     return base
 
 
 class SprintBook:
-    """Учёт занятой трудоёмкости по спринтам для жадного распределения."""
+    """Учёт занятой трудоёмкости по спринтам. Основная упаковка (WBS
+    целиком) -- через pack_block(); "После запуска" (WBS-9.3/9.4, Task-level,
+    как в v1) -- через assign()/reserve_exclusive()."""
 
     def __init__(self) -> None:
         self.sprints: list[dict] = []  # [{sprint, task_ids, hours_used}]
@@ -487,7 +524,25 @@ class SprintBook:
             self.sprints.append({"sprint": len(self.sprints) + 1, "task_ids": [], "hours_used": 0.0})
         return self.sprints[n - 1]
 
+    def pack_block(self, task_ids: list[str], hours: float) -> int:
+        """Целиком добавляет блок (WBS) в текущий открытый спринт, если тот
+        помещается в остаток capacity; иначе закрывает текущий спринт (даже
+        короче номинальной длины) и открывает новый. Блок больше capacity не
+        режется -- получает спринт целиком под себя (спринт растягивается,
+        см. sprint_duration_weeks_for). Топологический порядок вызовов
+        (WBS-зависимости раньше зависимых) гарантирует, что зависимость уже
+        размещена в спринте <= текущего -- явный min_sprint floor не нужен,
+        в отличие от assign() ниже."""
+        current = self._ensure(max(len(self.sprints), 1))
+        if current["task_ids"] and current["hours_used"] + hours > CAPACITY_PER_SPRINT_HOURS:
+            current = self._ensure(len(self.sprints) + 1)
+        current["task_ids"].extend(task_ids)
+        current["hours_used"] += hours
+        return current["sprint"]
+
     def assign(self, task_id: str, min_sprint: int, hours: float) -> int:
+        """Task-level жадное размещение -- используется только для
+        WBS-9.3/9.4 ("После запуска"), не для основной WBS-упаковки."""
         s = max(min_sprint, 1)
         while True:
             sprint_obj = self._ensure(s)
@@ -507,39 +562,41 @@ class SprintBook:
 
 
 def build_sprint_plan(
-    all_tasks: list[dict],
+    milestones: list[dict],
     depends_on: dict[str, list[str]],
     effort: dict[str, dict],
     start_date: date,
     target_launch_date: date,
     hypercare_label: str,
 ) -> dict:
+    all_tasks = flatten_tasks(milestones)
     template_order = [t["id"] for t in all_tasks]
+    wbs_tasks = wbs_task_ids_by_wbs(milestones)
 
-    # Основной граф без T-9.3.2 (особый случай) -- как WBS-9.3/9.4 разбираются
-    # ниже отдельно, "После запуска" (см. agent/sprint-mapping-rules.md).
-    post_launch_ids = {"T-9.3.1", SUPPORT_MONITORING_TASK_ID, "T-9.3.3", "T-9.4.1", "T-9.4.2"}
-    main_ids = [tid for tid in template_order if tid not in post_launch_ids]
+    # Основная WBS-упаковка -- без WBS-9.3/9.4 (Task-level "После запуска",
+    # см. ниже, как и T-9.3.2 внутри WBS-9.3 в v1).
+    main_wbs_ids = [wbs_id for wbs_id in wbs_tasks if wbs_id not in POST_LAUNCH_WBS_IDS]
+    wbs_deps = build_wbs_dependencies(wbs_tasks, depends_on)
+    wbs_order = topological_order(main_wbs_ids, wbs_deps)
 
-    main_order = topological_order(main_ids, depends_on)
     book = SprintBook()
     task_sprint: dict[str, int] = {}
-    for tid in main_order:
-        deps = depends_on.get(tid, [])
-        min_sprint = 1
-        for d in deps:
-            if d in task_sprint:
-                min_sprint = max(min_sprint, task_sprint[d])
-        hours = effort[tid]["hours"]
-        task_sprint[tid] = book.assign(tid, min_sprint, hours)
+    for wbs_id in wbs_order:
+        tids = wbs_tasks[wbs_id]
+        hours = sum(effort[tid]["hours"] for tid in tids)
+        sprint_no = book.pack_block(tids, hours)
+        for tid in tids:
+            task_sprint[tid] = sprint_no
 
     if LAUNCH_TASK_ID not in task_sprint:
         raise ValueError(f"{LAUNCH_TASK_ID} (запуск, WBS-9.2) не распределён -- проверь depends_on")
     launch_sprint = task_sprint[LAUNCH_TASK_ID]
 
     # "Гиперподдержка после запуска" -- WBS-9.3/9.4 планируются после
-    # launch_sprint тем же алгоритмом, но с явным floor по min_sprint, т.к.
-    # T-9.3.1 не имеет depends_on в шаблоне (иначе встал бы в спринт 1).
+    # launch_sprint тем же Task-level алгоритмом, что и в v1 (не участвуют в
+    # WBS-упаковке выше), с явным floor по min_sprint, т.к. T-9.3.1 не имеет
+    # depends_on в шаблоне (иначе встал бы в спринт 1).
+    post_launch_ids = {"T-9.3.1", SUPPORT_MONITORING_TASK_ID, "T-9.3.3", "T-9.4.1", "T-9.4.2"}
     post_order = topological_order(
         [tid for tid in template_order if tid in post_launch_ids and tid != SUPPORT_MONITORING_TASK_ID],
         depends_on,
@@ -563,27 +620,38 @@ def build_sprint_plan(
             task_sprint[SUPPORT_MONITORING_TASK_ID] = support_sprint
             floor_sprint = max(floor_sprint, support_sprint + 1)
 
-    # Именование спринтов -- Спринт {N} (дата начала-дата конца), вычислено из
-    # start_date, без нового поля во входной схеме. "Хвостовой" спринт,
-    # зарезервированный целиком под T-9.3.2 (reserve_exclusive), получает в
-    # скобках метку WBS-9.3 (`hypercare_label`, "Гиперподдержка" в шаблоне
-    # v1) -- это единственный случай, когда весь спринт однозначно
+    # Даты -- последовательно накопительно (не фиксированный грид):
+    # длительность каждого спринта = sprint_duration_weeks_for(hours_used),
+    # следующий спринт стартует сразу после конца предыдущего. "Хвостовой"
+    # спринт, зарезервированный целиком под T-9.3.2 (reserve_exclusive),
+    # получает в скобках метку WBS-9.3 (`hypercare_label`, "Гиперподдержка"
+    # в шаблоне v1) -- единственный случай, когда весь спринт однозначно
     # принадлежит одной содержательной работе. T-7.3.1 (`remediation`)
     # делит спринт с обычными Task на общих основаниях (bin-packing, не
     # эксклюзивная резервация) -- подписывать такой спринт целиком как
     # "устранение замечаний" было бы неточно, поэтому он не помечается.
+    cursor = start_date
     for sprint_obj in book.sprints:
+        weeks = sprint_duration_weeks_for(sprint_obj["hours_used"])
+        sprint_start = cursor
+        sprint_end = sprint_start + timedelta(weeks=weeks) - timedelta(days=1)
+        sprint_obj["start_date"] = sprint_start.isoformat()
+        sprint_obj["end_date"] = sprint_end.isoformat()
+        sprint_obj["duration_weeks"] = weeks
         label = (
             hypercare_label
             if any(r["task_id"] == SUPPORT_MONITORING_TASK_ID for r in sprint_obj.get("reserved") or [])
             else None
         )
-        sprint_obj["name"] = sprint_name(sprint_obj["sprint"], start_date, label)
+        sprint_obj["name"] = sprint_name(sprint_obj["sprint"], sprint_start, sprint_end, label)
+        cursor = sprint_end + timedelta(days=1)
 
-    available_sprints = math.ceil(
-        (target_launch_date - start_date).days / (SPRINT_LENGTH_WEEKS * 7)
-    )
-    fits = launch_sprint <= available_sprints
+    # R-7 (v2): количество спринтов само по себе не показатель при переменной
+    # длине -- сравниваются фактические недели до запуска против доступных
+    # недель start_date -> target_launch_date.
+    weeks_used_until_launch = sum(s["duration_weeks"] for s in book.sprints[:launch_sprint])
+    available_weeks = round((target_launch_date - start_date).days / 7, 1)
+    fits = weeks_used_until_launch <= available_weeks
 
     return {
         "sprint_length_weeks": SPRINT_LENGTH_WEEKS,
@@ -592,17 +660,18 @@ def build_sprint_plan(
         "task_sprint": task_sprint,
         "launch_task_id": LAUNCH_TASK_ID,
         "total_sprints_used": launch_sprint,
-        "available_sprints": available_sprints,
+        "weeks_used_until_launch": weeks_used_until_launch,
+        "available_weeks": available_weeks,
         "fits_in_target_launch_date": fits,
         "warning": None
         if fits
         else (
-            f"Расчётный план требует {launch_sprint} спринтов до запуска "
-            f"({LAUNCH_TASK_ID}), доступно {available_sprints} между start_date "
-            f"и target_launch_date -- дефицит {launch_sprint - available_sprints} "
-            f"спринт(ов) (~{(launch_sprint - available_sprints) * SPRINT_LENGTH_WEEKS} нед.). "
-            f"Решение (сдвиг target_launch_date / увеличение capacity / "
-            f"сокращение объёма) -- за консультантом/PM, не за агентом."
+            f"Расчётный план требует {weeks_used_until_launch} нед. до запуска "
+            f"({LAUNCH_TASK_ID}, {launch_sprint} спринт(ов)), доступно {available_weeks} "
+            f"нед. между start_date и target_launch_date -- дефицит "
+            f"{round(weeks_used_until_launch - available_weeks, 1)} нед. Решение (сдвиг "
+            f"target_launch_date / увеличение capacity / сокращение объёма) -- за "
+            f"консультантом/PM, не за агентом."
         ),
         "post_launch_note": (
             "WBS-9.3 (Гиперподдержка) и WBS-9.4 (Завершение проекта) запланированы "
@@ -734,7 +803,7 @@ def assemble_plan(input_data: dict, llm_client=None) -> dict:
     effort = build_effort_estimates(all_tasks, effort_ref)
 
     sprint_result = build_sprint_plan(
-        all_tasks,
+        milestones,
         dependencies,
         effort,
         parse_date(input_data["start_date"]),
@@ -876,12 +945,13 @@ def run_selftest() -> None:
     risk_ids = {r["id"] for r in tight_plan["risks"]}
     assert "R-7" in risk_ids, risk_ids
     print(
-        f"[selftest] Тесный срок: total_sprints_used={tsp['total_sprints_used']}, "
-        f"available_sprints={tsp['available_sprints']}, R-7 в risks -- OK"
+        f"[selftest] Тесный срок: weeks_used_until_launch={tsp['weeks_used_until_launch']}, "
+        f"available_weeks={tsp['available_weeks']}, R-7 в risks -- OK"
     )
 
-    # Именование спринтов -- "Спринт {N} (start–end)", дата начала считается
-    # от start_date шаблона; "хвостовой" спринт, зарезервированный под
+    # Именование спринтов -- "Спринт {N} (start–end)", даты вычисляются
+    # последовательно накопительно (не фиксированный грид -- см.
+    # sprint_duration_weeks_for); "хвостовой" спринт, зарезервированный под
     # T-9.3.2 (support_monitoring), несёт метку WBS-9.3 ("Гиперподдержка") в
     # скобках, остальные спринты -- без метки.
     import re as _re
@@ -891,7 +961,8 @@ def run_selftest() -> None:
     for s in tsp["sprints"]:
         assert sprint_name_re.match(s["name"]), f"неожиданный формат имени спринта: {s['name']!r}"
     first = tsp["sprints"][0]
-    assert first["name"] == f"Спринт 1 ({tight_input['start_date']}–2026-08-16)", first["name"]
+    assert first["start_date"] == tight_input["start_date"], first
+    assert first["name"] == f"Спринт 1 ({first['start_date']}–{first['end_date']})", first["name"]
     hypercare_sprints = [
         s for s in tsp["sprints"] if any(r["task_id"] == SUPPORT_MONITORING_TASK_ID for r in s.get("reserved") or [])
     ]
@@ -900,6 +971,84 @@ def run_selftest() -> None:
     non_hypercare = [s for s in tsp["sprints"] if s not in hypercare_sprints]
     assert all(", " not in s["name"] for s in non_hypercare), "обычный спринт не должен нести метку в скобках"
     print(f"[selftest] Именование спринтов: {first['name']!r}, гиперподдержка -- {hypercare_sprints[0]['name']!r} -- OK")
+
+    # --- WBS-упаковка (Этап 5, v2): единица упаковки -- WBS целиком. ---
+
+    def _synthetic_milestone(wbs_defs: list[tuple[str, list[tuple[str, list[str]]]]]) -> list[dict]:
+        return [
+            {
+                "id": "M1",
+                "name": "M1 (synthetic)",
+                "description": "",
+                "wbs": [
+                    {
+                        "id": wbs_id,
+                        "name": wbs_id,
+                        "description": "",
+                        "tasks": [
+                            {"id": tid, "name": tid, "depends_on": deps, "used_by": []} for tid, deps in tasks
+                        ],
+                    }
+                    for wbs_id, tasks in wbs_defs
+                ],
+            }
+        ]
+
+    def _flat_effort(hours_by_task: dict[str, float]) -> dict[str, dict]:
+        return {tid: {"task_type": "synthetic", "hours": h, "basis": "selftest"} for tid, h in hours_by_task.items()}
+
+    # WBS сам по себе больше capacity (80ч по умолчанию) -- не режется,
+    # спринт растягивается под него один (не разбивается на несколько).
+    big_wbs_milestones = _synthetic_milestone(
+        [
+            ("WBS-1.1", [("T-1.1.1", []), ("T-1.1.2", [])]),
+            ("WBS-9.2", [(LAUNCH_TASK_ID, ["T-1.1.1", "T-1.1.2"])]),
+        ]
+    )
+    big_wbs_depends_on = {"T-1.1.1": [], "T-1.1.2": [], LAUNCH_TASK_ID: ["T-1.1.1", "T-1.1.2"]}
+    big_wbs_effort = _flat_effort({"T-1.1.1": 60.0, "T-1.1.2": 50.0, LAUNCH_TASK_ID: 1.0})  # 110ч > 80ч capacity
+    big_wbs_plan = build_sprint_plan(
+        big_wbs_milestones, big_wbs_depends_on, big_wbs_effort, date(2026, 1, 1), date(2026, 6, 1), "Гиперподдержка"
+    )
+    assert len(big_wbs_plan["sprints"]) == 2, big_wbs_plan["sprints"]
+    assert big_wbs_plan["sprints"][0]["hours_used"] == 110.0, big_wbs_plan["sprints"][0]
+    assert set(big_wbs_plan["sprints"][0]["task_ids"]) == {"T-1.1.1", "T-1.1.2"}, big_wbs_plan["sprints"][0]
+    assert big_wbs_plan["sprints"][0]["duration_weeks"] == math.ceil(110.0 / WEEKLY_CAPACITY_HOURS), (
+        big_wbs_plan["sprints"][0]
+    )
+    print(
+        f"[selftest] WBS-упаковка: WBS больше capacity (110ч > {CAPACITY_PER_SPRINT_HOURS}ч) -- не режется, "
+        f"один спринт растянут на {big_wbs_plan['sprints'][0]['duration_weeks']} нед. -- OK"
+    )
+
+    # WBS, из-за которого спринт закрывается раньше номинальных
+    # sprint_duration_weeks -- второй WBS целиком не помещается в остаток
+    # (80-10=70ч < 75ч), спринт 1 закрывается с всего 10ч (< capacity).
+    early_close_milestones = _synthetic_milestone(
+        [
+            ("WBS-1.1", [("T-1.1.1", [])]),
+            ("WBS-1.2", [("T-1.2.1", [])]),
+            ("WBS-9.2", [(LAUNCH_TASK_ID, ["T-1.2.1"])]),
+        ]
+    )
+    early_close_depends_on = {"T-1.1.1": [], "T-1.2.1": [], LAUNCH_TASK_ID: ["T-1.2.1"]}
+    early_close_effort = _flat_effort({"T-1.1.1": 10.0, "T-1.2.1": 75.0, LAUNCH_TASK_ID: 1.0})
+    early_close_plan = build_sprint_plan(
+        early_close_milestones, early_close_depends_on, early_close_effort,
+        date(2026, 1, 1), date(2026, 6, 1), "Гиперподдержка",
+    )
+    assert len(early_close_plan["sprints"]) == 2, early_close_plan["sprints"]
+    assert early_close_plan["sprints"][0]["hours_used"] == 10.0, early_close_plan["sprints"][0]
+    assert early_close_plan["sprints"][0]["task_ids"] == ["T-1.1.1"], early_close_plan["sprints"][0]
+    assert early_close_plan["sprints"][0]["duration_weeks"] < SPRINT_LENGTH_WEEKS, (
+        "спринт с 10ч должен закрыться раньше номинальных sprint_duration_weeks", early_close_plan["sprints"][0]
+    )
+    assert "T-1.2.1" in early_close_plan["sprints"][1]["task_ids"], early_close_plan["sprints"][1]
+    print(
+        f"[selftest] WBS-упаковка: WBS-1.2 (75ч) не влез в остаток спринта 1 (70ч) -- спринт 1 закрыт "
+        f"с {early_close_plan['sprints'][0]['hours_used']}ч ({early_close_plan['sprints'][0]['duration_weeks']} "
+        f"нед. < номинальных {SPRINT_LENGTH_WEEKS}) -- OK"
+    )
 
     # Контракт LLM-слоя: если llm_client меняет структуру -- adapt_wording_with_llm
     # обязан отклонить результат, а не молча принять.
