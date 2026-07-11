@@ -180,7 +180,7 @@
   }
   .status.ok { background: #e4f0e8; color: var(--accent); }
   .status.err { background: #f7e6e2; color: #a4402b; }
-  pre#output {
+  pre#output, pre#serverReport {
     background: #1c1c1c;
     color: #e9e6df;
     font-family: var(--mono);
@@ -192,7 +192,10 @@
     max-height: 480px;
     overflow-y: auto;
     margin: 0;
+    white-space: pre-wrap;
   }
+  pre#serverReport { margin-top: 12px; }
+  pre#serverReport:empty { display: none; }
   .missing-list {
     font-size: 12px;
     color: #a4402b;
@@ -250,6 +253,10 @@
 
       <label class="req" for="client">Заказчик</label>
       <input type="text" id="client" placeholder="ABC sp. z o.o.">
+
+      <label class="req" for="jira_project_key">Jira Project Key</label>
+      <input type="text" id="jira_project_key" placeholder="напр. ESK">
+      <p class="hint">Ключ уже существующего Jira-проекта. Email/токен для подключения сервер берёт из <code>agent/.env</code>, здесь не указываются.</p>
     </div>
 
     <div class="section">
@@ -319,6 +326,19 @@
       <button type="button" class="primary" id="downloadBtn" onclick="downloadJson()">Скачать .json</button>
     </div>
     <div class="copied-msg" id="copiedMsg"></div>
+
+    <div class="section">
+      <div class="json-head">
+        <div class="section-label">Создание проекта в Jira</div>
+        <span class="status" id="reportStatus">не запущено</span>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" id="createPlanBtn" onclick="createPlan()" disabled>Создать план (dry-run)</button>
+        <button type="button" id="executeBtn" onclick="executePlan()" style="display:none">Выполнить (создать в Jira)</button>
+      </div>
+      <p class="hint">Требует запущенного локального сервера (<code>python3 agent/run_form.py</code>). Если сервер не поднят — используйте «Скачать .json» и запустите <code>agent/create_project.py</code> вручную.</p>
+      <pre id="serverReport"></pre>
+    </div>
   </div>
 
 </div>
@@ -397,6 +417,8 @@ function buildJson() {
   const statusEl = document.getElementById('status');
   const missingEl = document.getElementById('missing');
   const downloadBtn = document.getElementById('downloadBtn');
+  const createPlanBtn = document.getElementById('createPlanBtn');
+  const projectKey = currentProjectKey();
 
   if (missing.length === 0) {
     statusEl.textContent = 'готово';
@@ -408,6 +430,85 @@ function buildJson() {
     statusEl.className = 'status err';
     missingEl.innerHTML = missing.map(m => `<li>${escapeHtml(m)}</li>`).join('');
     downloadBtn.disabled = true;
+  }
+  createPlanBtn.disabled = missing.length > 0 || !projectKey;
+}
+
+function currentProjectKey() {
+  return document.getElementById('jira_project_key').value.trim();
+}
+
+async function postAction(path, body) {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return resp.json();
+}
+
+async function createPlan() {
+  const reportEl = document.getElementById('serverReport');
+  const reportStatus = document.getElementById('reportStatus');
+  const createPlanBtn = document.getElementById('createPlanBtn');
+  const executeBtn = document.getElementById('executeBtn');
+
+  const input_json = JSON.parse(document.getElementById('output').textContent);
+  const project_key = currentProjectKey();
+
+  createPlanBtn.disabled = true;
+  executeBtn.style.display = 'none';
+  reportStatus.textContent = 'выполняется...';
+  reportStatus.className = 'status';
+  reportEl.textContent = '';
+
+  try {
+    const data = await postAction('/plan', { input_json, project_key });
+    reportEl.textContent = data.report || '(пустой отчёт)';
+    if (data.ok) {
+      reportStatus.textContent = 'dry-run готов';
+      reportStatus.className = 'status ok';
+      executeBtn.style.display = '';
+    } else {
+      reportStatus.textContent = 'ошибка';
+      reportStatus.className = 'status err';
+    }
+  } catch (e) {
+    reportStatus.textContent = 'сервер недоступен';
+    reportStatus.className = 'status err';
+    reportEl.textContent = 'Локальный сервер недоступен (запущен ли python3 agent/run_form.py?).\n' +
+      'Используйте «Скачать .json» и запустите вручную:\n' +
+      'python3 agent/create_project.py --input <файл>.json --project-key ' + (project_key || '...') +
+      ' --jira-url ... --email ... --api-token ...';
+  } finally {
+    createPlanBtn.disabled = false;
+  }
+}
+
+async function executePlan() {
+  const reportEl = document.getElementById('serverReport');
+  const reportStatus = document.getElementById('reportStatus');
+  const executeBtn = document.getElementById('executeBtn');
+  const project_key = currentProjectKey();
+
+  if (!confirm('Реально создать Epic/Issue/Subtask в Jira-проекте ' + project_key + '? Действие необратимо.')) {
+    return;
+  }
+
+  const input_json = JSON.parse(document.getElementById('output').textContent);
+
+  executeBtn.disabled = true;
+  reportStatus.textContent = 'выполняется...';
+  reportStatus.className = 'status';
+
+  try {
+    const data = await postAction('/execute', { input_json, project_key });
+    reportEl.textContent = data.report || '(пустой отчёт)';
+    reportStatus.textContent = data.ok ? 'создано в Jira' : 'ошибка';
+    reportStatus.className = 'status ' + (data.ok ? 'ok' : 'err');
+    executeBtn.style.display = 'none';
+  } catch (e) {
+    reportEl.textContent += '\n\n(сервер лаунчера уже завершил работу или недоступен)';
   }
 }
 
