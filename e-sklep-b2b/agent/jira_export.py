@@ -1697,9 +1697,9 @@ def run_selftest() -> None:
         "короткое name не должно превышать лимит Jira -- обнаружено на живом TPT (HTTP 400 при полном имени)",
         [(sp.name, len(sp.name)) for sp in planned_sprints],
     )
-    assert planned_sprints[0].start_date == "2026-08-03" and planned_sprints[0].end_date == "2026-08-16", (
-        planned_sprints[0]
-    )
+    first_sprint_plan = plan["sprint_plan"]["sprints"][0]
+    assert planned_sprints[0].start_date == first_sprint_plan["start_date"], planned_sprints[0]
+    assert planned_sprints[0].end_date == first_sprint_plan["end_date"], planned_sprints[0]
     print(
         f"[selftest] build_planned_sprints: {len(planned_sprints)} спринтов, короткое name (<={JIRA_SPRINT_NAME_MAX_LENGTH} "
         f"симв.) + полное goal без изменений, даты распознаются из плана -- OK"
