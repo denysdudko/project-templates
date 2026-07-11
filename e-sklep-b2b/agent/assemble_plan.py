@@ -59,28 +59,22 @@ CAPACITY_PER_SPRINT_HOURS = _ESTIMATION_CONFIG["team_capacity_per_sprint"]
 REMEDIATION_BUFFER_HOURS = 0.2 * CAPACITY_PER_SPRINT_HOURS  # 16 при значениях по умолчанию
 
 LAUNCH_TASK_ID = "T-9.2.2"  # WBS-9.2, "запуск в эксплуатацию" (fit-check gate)
-HYPERCARE_WBS_ID = "WBS-9.3"  # для подписи спринта, в который попадает вся гиперподдержка
 
 # Task, для которых keyword-эвристика Этапа 3 не даёт совпадения, но
 # правильный тип однозначно следует из description самой Task (а не
-# придуман заново). Пример: T-9.3.1 называется "Определить период и
-# порядок гиперподдержки", но его description буквально начинается со
-# слова "Согласовать с заказчиком..." — то есть это Tier negotiation,
+# придуман заново). Пример: T-8.1.1 называется "Определить состав
+# участников и формат обучения", но его description буквально начинается
+# со слова "Согласовать с заказчиком..." — то есть это Tier negotiation,
 # просто в Task.name выбран синоним, не входящий в keywords
 # effort-estimates.yaml. Это находка при реализации Этапа 6, а не
 # самостоятельная переоценка типов — effort-estimates.yaml не менялся.
 # Каждая запись обязана быть задокументирована здесь с обоснованием.
 MANUAL_TASK_TYPE_OVERRIDES: dict[str, tuple[str, str]] = {
-    "T-9.3.1": (
-        "negotiation",
-        'description задачи начинается с "Согласовать с заказчиком продолжительность '
-        'периода..." — тот же глагол, что и keyword "Согласовать", просто в Task.name '
-        'использован синоним "Определить".',
-    ),
     "T-8.1.1": (
         "negotiation",
         'description начинается с "Согласовать с заказчиком, кто из сотрудников..." '
-        '— тот же случай, что T-9.3.1: в Task.name использован синоним "Определить".',
+        '— тот же паттерн: в Task.name использован синоним "Определить" вместо '
+        '"Согласовать".',
     ),
     "T-2.1.2": (
         "negotiation",
@@ -196,14 +190,6 @@ def load_sprint_plan_template(path: Path | None = None) -> dict:
     return load_yaml(path)
 
 
-def find_wbs_name(template_schema: dict, wbs_id: str) -> str:
-    for m in template_schema["milestones"]:
-        for wbs in m["wbs"]:
-            if wbs["id"] == wbs_id:
-                return wbs["name"]
-    raise KeyError(f"WBS {wbs_id!r} не найден в schema/milestones_wbs.yaml")
-
-
 # ---------------------------------------------------------------------------
 # Charter
 # ---------------------------------------------------------------------------
@@ -228,10 +214,11 @@ def build_charter(input_data: dict, template_schema: dict) -> dict:
         "target_launch_date": input_data["target_launch_date"],
         "target_launch_date_definition": (
             "target_launch_date -- дата запуска магазина в эксплуатацию (WBS-9.2, "
-            f"{LAUNCH_TASK_ID}), не дата закрытия всего проекта. Гиперподдержка "
-            "(WBS-9.3) и формальное завершение проекта (WBS-9.4) продолжаются "
-            "после этой даты (см. agent/sprint-mapping-rules.md, раздел "
-            '"Гиперподдержка после запуска").'
+            f"{LAUNCH_TASK_ID}), не дата закрытия всего проекта. Формальное "
+            "завершение проекта (WBS-9.4) продолжается после этой даты. "
+            'Гиперподдержка ведётся отдельным Epic "Поддержка" в Jira '
+            "(создаётся всегда при экспорте, Этап 8) и не входит в этот план -- "
+            "WBS/Task, sprint-планирование и оценки трудозатрат её не описывают."
         ),
         "requested_duration_weeks": round(requested_weeks, 1),
         "template_default_duration_weeks": project.get("default_duration_weeks"),
@@ -396,13 +383,6 @@ def effort_for_task(task_type_id: str, task_types_by_id: dict[str, dict]) -> dic
             "hours": REMEDIATION_BUFFER_HOURS,
             "basis": "remediation_buffer_hours (константа v1, sprint-mapping-rules.md)",
         }
-    if task_type_id == "support_monitoring":
-        midpoint_per_week = (base["min"] + base["max"]) / 2
-        return {
-            "task_type": task_type_id,
-            "hours_per_week": midpoint_per_week,
-            "basis": "support_monitoring: недельная нагрузка, не point-оценка на Task",
-        }
     if base is None:
         raise ValueError(f"Тип {task_type_id}: base_estimate_hours отсутствует и не является особым случаем")
     midpoint = (base["min"] + base["max"]) / 2
@@ -474,11 +454,8 @@ def wbs_sprint_number_by_wbs(sprint_template: dict, known_wbs_ids: set[str]) -> 
     return wbs_sprint
 
 
-def sprint_name(sprint_number: int, start: date, end: date, label: str | None = None) -> str:
-    base = f"Спринт {sprint_number} ({start.isoformat()}–{end.isoformat()})"
-    if label:
-        return f"Спринт {sprint_number} ({start.isoformat()}–{end.isoformat()}, {label})"
-    return base
+def sprint_name(sprint_number: int, start: date, end: date) -> str:
+    return f"Спринт {sprint_number} ({start.isoformat()}–{end.isoformat()})"
 
 
 def build_sprint_plan(
@@ -486,7 +463,6 @@ def build_sprint_plan(
     effort: dict[str, dict],
     start_date: date,
     target_launch_date: date,
-    hypercare_label: str,
     sprint_template: dict,
 ) -> dict:
     wbs_tasks = wbs_task_ids_by_wbs(milestones)
@@ -508,10 +484,7 @@ def build_sprint_plan(
     # Даты -- последовательно накопительно: первый спринт стартует в
     # start_date, каждый следующий -- сразу после конца предыдущего.
     # Длительность -- duration_weeks из schema/sprint_plan.yaml (ручное
-    # решение консультанта), не производная от трудоёмкости. Спринт, в
-    # который целиком попадает WBS-9.3 (Гиперподдержка), несёт в скобках
-    # метку из названия WBS-9.3 -- единственный случай пометки (см.
-    # agent/sprint-mapping-rules.md, "Именование спринтов").
+    # решение консультанта), не производная от трудоёмкости.
     cursor = start_date
     sprints_out: list[dict] = []
     for entry in sorted(sprint_template["sprints"], key=lambda e: e["number"]):
@@ -521,7 +494,6 @@ def build_sprint_plan(
         hours = sum(effort[tid].get("hours", 0.0) for tid in tids)
         sprint_start = cursor
         sprint_end = sprint_start + timedelta(weeks=weeks) - timedelta(days=1)
-        label = hypercare_label if HYPERCARE_WBS_ID in entry["wbs"] else None
         sprints_out.append(
             {
                 "sprint": n,
@@ -530,7 +502,7 @@ def build_sprint_plan(
                 "start_date": sprint_start.isoformat(),
                 "end_date": sprint_end.isoformat(),
                 "duration_weeks": weeks,
-                "name": sprint_name(n, sprint_start, sprint_end, label),
+                "name": sprint_name(n, sprint_start, sprint_end),
             }
         )
         cursor = sprint_end + timedelta(days=1)
@@ -562,9 +534,11 @@ def build_sprint_plan(
             f"консультантом/PM, не за агентом."
         ),
         "post_launch_note": (
-            "WBS-9.3 (Гиперподдержка) и WBS-9.4 (Завершение проекта) запланированы "
-            "после launch_sprint и не входят в fits_in_target_launch_date -- это "
-            "ожидаемое продолжение работ после запуска, не дефицит времени."
+            "WBS-9.4 (Завершение проекта) запланирован после launch_sprint и не "
+            "входит в fits_in_target_launch_date -- это ожидаемое продолжение "
+            "работ после запуска, не дефицит времени. Гиперподдержка ведётся "
+            'отдельным Epic "Поддержка" вне этого плана (см. '
+            "charter.target_launch_date_definition)."
         ),
     }
 
@@ -696,7 +670,6 @@ def assemble_plan(input_data: dict, llm_client=None) -> dict:
         effort,
         parse_date(input_data["start_date"]),
         parse_date(input_data["target_launch_date"]),
-        find_wbs_name(template_schema, HYPERCARE_WBS_ID),
         sprint_template,
     )
 
@@ -838,24 +811,18 @@ def run_selftest() -> None:
         f"available_weeks={tsp['available_weeks']}, R-7 в risks -- OK"
     )
 
-    # Именование спринтов -- "Спринт {N} (start–end[, метка])", даты
-    # вычисляются последовательно накопительно от start_date проекта. Спринт,
-    # в который schema/sprint_plan.yaml целиком помещает WBS-9.3
-    # (Гиперподдержка), несёт метку в скобках -- единственный случай пометки.
+    # Именование спринтов -- "Спринт {N} (start–end)", даты вычисляются
+    # последовательно накопительно от start_date проекта.
     import re as _re
 
-    sprint_name_re = _re.compile(r"^Спринт \d+ \(\d{4}-\d{2}-\d{2}–\d{4}-\d{2}-\d{2}(, .+)?\)$")
+    sprint_name_re = _re.compile(r"^Спринт \d+ \(\d{4}-\d{2}-\d{2}–\d{4}-\d{2}-\d{2}\)$")
     assert tsp["sprints"], "в tight_plan нет ни одного спринта -- ветка не проверена"
     for s in tsp["sprints"]:
         assert sprint_name_re.match(s["name"]), f"неожиданный формат имени спринта: {s['name']!r}"
     first = tsp["sprints"][0]
     assert first["start_date"] == tight_input["start_date"], first
     assert first["name"] == f"Спринт 1 ({first['start_date']}–{first['end_date']})", first["name"]
-    hypercare_sprints = [s for s in tsp["sprints"] if s["name"].endswith(", Гиперподдержка)")]
-    assert len(hypercare_sprints) == 1, hypercare_sprints
-    non_hypercare = [s for s in tsp["sprints"] if s not in hypercare_sprints]
-    assert all(", " not in s["name"] for s in non_hypercare), "обычный спринт не должен нести метку в скобках"
-    print(f"[selftest] Именование спринтов: {first['name']!r}, гиперподдержка -- {hypercare_sprints[0]['name']!r} -- OK")
+    print(f"[selftest] Именование спринтов: {first['name']!r} -- OK")
 
     # --- Чтение schema/sprint_plan.yaml (Этап 5 -- шаблон, не алгоритм). ---
 
@@ -933,7 +900,7 @@ def run_selftest() -> None:
         ]
     }
     synthetic_plan = build_sprint_plan(
-        synthetic_milestones, synthetic_effort, date(2026, 1, 1), date(2026, 6, 1), "Гиперподдержка", synthetic_template
+        synthetic_milestones, synthetic_effort, date(2026, 1, 1), date(2026, 6, 1), synthetic_template
     )
     assert synthetic_plan["task_sprint"] == {"WBS-1.1-T1": 1, "WBS-1.2-T1": 2, LAUNCH_TASK_ID: 2}, (
         synthetic_plan["task_sprint"]
