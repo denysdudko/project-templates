@@ -51,19 +51,21 @@ Sprint (`customfield_...`, обнаруживается через `GET /rest/ap
 `schema.sprint_field_id`, если найден, только показывается в dry-run
 отчёте для консультанта, но не проставляется в issue напрямую.
 
-При `--create-sprints` (opt-in) это ограничение снимается, но только в
-плоском режиме (`--allow-flat-fallback`, Task экспортируются как Issue, не
-Subtask): после `execute_export()` и создания Sprint скрипт собирает по
-`sprint_plan.task_sprint` реальные ключи Issue на каждый Sprint и
-привязывает их через `POST /rest/agile/1.0/sprint/{id}/issue` (пакетами по
+При `--create-sprints` (opt-in) это ограничение снимается для WBS-Issue:
+после `execute_export()` и создания Sprint скрипт собирает по
+`sprint_plan` реальные ключи WBS-Issue на каждый Sprint и привязывает их
+через `POST /rest/agile/1.0/sprint/{id}/issue` (пакетами по
 `MAX_ISSUES_PER_SPRINT_LINK_BATCH`, лимит Jira Agile API) -- это
 устанавливает нативное поле Sprint напрямую, а не только текст в
-description. В стандартном Subtask-режиме `--create-sprints` останавливается
-явной `SprintLinkingUnavailableError` (`require_sprint_linking_possible`) --
-обнаружено эмпирически на живом TPT: Jira Sub-task не хранит поле Sprint
-независимо от родителя (POST возвращает 204, но customfield остаётся
-null), скрипт не подменяет привязку неточной привязкой родительского
-WBS-Issue и не делает вид, что она удалась. Без `--create-sprints`
+description. Привязываются только WBS-Issue, не Subtask -- обнаружено
+эмпирически на живом TPT: Jira Sub-task не хранит поле Sprint независимо
+от родителя (POST возвращает 204, но customfield остаётся null), тот же
+вызов на обычном Issue сработал сразу. С Этапа 5 v2 (упаковка WBS целиком
+в один спринт, не по отдельной Task) WBS-Issue всегда лежит ровно в одном
+спринте -- `build_wbs_sprint()` берёт этот спринт напрямую, без прежнего
+правила "самый ранний из нескольких" (WBS-9.3/9.4, Task-level "После
+запуска", могут расходиться по нескольким спринтам -- такие WBS не
+попадают в результат и не привязываются молча). Без `--create-sprints`
 поведение не меняется (текст в description остаётся единственным способом).
 
 Риски в description Эпика -- настоящая ADF-таблица (`build_risks_adf_table`),
@@ -154,12 +156,6 @@ class BoardUnavailableError(RuntimeError):
     """--create-sprints: у проекта нет доски или ни одна не Scrum (не
     поддерживает спринты) -- скрипт не создаёт доску самостоятельно,
     решение явно за человеком (по аналогии с SubtaskUnavailableError)."""
-
-
-class SprintLinkingUnavailableError(RuntimeError):
-    """--create-sprints в стандартном Subtask-режиме: Jira Sub-task не
-    хранит поле Sprint независимо от родителя -- скрипт не делает вид, что
-    привязка удалась, а останавливается явно (см. require_sprint_linking_possible)."""
 
 
 # ---------------------------------------------------------------------------
@@ -273,31 +269,6 @@ def require_sprint_capable_board(client, board_candidates: list[dict], project_k
         f"У проекта {project_key} есть доска(и) (типы: {checked_types}), но ни одна не поддерживает "
         "Sprint (GET /rest/agile/1.0/board/{id}/sprint отклонён как 'does not support sprints') -- "
         "--create-sprints требует доску с включённой функцией Sprint, скрипт её не включает."
-    )
-
-
-def require_sprint_linking_possible(flat_fallback: bool) -> None:
-    """Привязка Issue/Subtask к Sprint (link_issues_to_sprints) требует, чтобы
-    Task экспортировались как отдельные Issue (плоский режим), а не как
-    Subtask -- Jira Sub-task не хранит поле Sprint независимо от родителя
-    (обнаружено эмпирически на живом TPT: POST /rest/agile/1.0/sprint/{id}/issue
-    вернул 204, но customfield Sprint у Subtask остался null; тот же вызов на
-    обычном Issue сработал сразу). Скрипт не подменяет привязку отдельных
-    Task неточной привязкой родительского WBS-Issue (в client-abc 7 из 39
-    WBS содержат Task в разных спринтах -- такая замена была бы неверной
-    для них) и не делает вид, что привязка удалась -- останавливается явно,
-    по аналогии с require_subtask_or_flat_confirmation."""
-    if flat_fallback:
-        return
-    raise SprintLinkingUnavailableError(
-        "Task экспортируются как Subtask (Subtask доступен в проекте, стандартный режим) -- Jira "
-        "Sub-task не хранит поле Sprint независимо от родителя (обнаружено эмпирически на живом TPT: "
-        "POST /rest/agile/1.0/sprint/{id}/issue вернул 204, но customfield Sprint у Subtask остался "
-        "null; тот же вызов на обычном Issue сработал сразу). Привязка отдельных Task к Sprint в этом "
-        "режиме структурно невозможна -- скрипт не подменяет её неточной привязкой родительского "
-        "WBS-Issue (в client-abc 7 из 39 WBS содержат Task в разных спринтах) и не делает вид, что "
-        "привязка удалась. Вопрос консультанту: принять плоскую структуру (WBS и Task -- оба Issue, "
-        "тогда Sprint можно привязать напрямую)? Если да -- повторите запуск с флагом --allow-flat-fallback."
     )
 
 
@@ -631,13 +602,30 @@ def build_planned_sprints(plan: dict) -> list[PlannedSprint]:
 MAX_ISSUES_PER_SPRINT_LINK_BATCH = 50  # лимит Jira Agile API за один вызов POST /sprint/{id}/issue
 
 
-def build_sprint_task_ids(plan: dict) -> dict[int, list[str]]:
-    """sprint_plan.task_sprint (task_id -> sprint_number) сгруппирован в
-    обратную сторону (sprint_number -> [task_id, ...]) -- используется и для
-    dry-run превью, и для реальной привязки после создания issues/спринтов."""
+def build_wbs_sprint(plan: dict) -> dict[str, int]:
+    """wbs_id -> sprint_number, только если все Task этого WBS оказались в
+    одном и том же спринте. С Этапа 5 v2 (упаковка WBS целиком) это всегда
+    так для основной упаковки; WBS-9.3/9.4 планируются Task-level ("После
+    запуска" в sprint-mapping-rules.md) и могут расходиться по нескольким
+    спринтам -- такие WBS не попадают в результат, привязка для них
+    неоднозначна и не делается молча."""
+    task_sprint = plan.get("sprint_plan", {}).get("task_sprint", {})
+    result: dict[str, int] = {}
+    for m in plan.get("milestones", []):
+        for wbs in m.get("wbs", []):
+            sprints = {task_sprint[t["id"]] for t in wbs.get("tasks", []) if t["id"] in task_sprint}
+            if len(sprints) == 1:
+                result[wbs["id"]] = next(iter(sprints))
+    return result
+
+
+def build_sprint_wbs_ids(plan: dict) -> dict[int, list[str]]:
+    """build_wbs_sprint() сгруппирован в обратную сторону (sprint_number ->
+    [wbs_id, ...]) -- используется и для dry-run превью, и для реальной
+    привязки WBS-Issue после создания issues/спринтов."""
     grouped: dict[int, list[str]] = {}
-    for task_id, sprint_number in plan.get("sprint_plan", {}).get("task_sprint", {}).items():
-        grouped.setdefault(sprint_number, []).append(task_id)
+    for wbs_id, sprint_number in build_wbs_sprint(plan).items():
+        grouped.setdefault(sprint_number, []).append(wbs_id)
     return grouped
 
 
@@ -988,7 +976,7 @@ def format_sprint_dry_run_report(
     planned_sprints: list[PlannedSprint],
     board: dict,
     project_key: str,
-    sprint_task_ids: dict[int, list[str]],
+    sprint_wbs_ids: dict[int, list[str]],
 ) -> str:
     lines = ["=== --create-sprints -- DRY-RUN, вызовов на запись не было ===", ""]
     lines.append(f"Проект: {project_key}")
@@ -1001,18 +989,18 @@ def format_sprint_dry_run_report(
         )
     lines.append("")
     lines.append(
-        "Было бы привязано к Sprint после реального создания -- "
+        "Было бы привязано к Sprint после реального создания -- только WBS-Issue, не Subtask -- "
         f"POST /rest/agile/1.0/sprint/{{id}}/issue, пакетами <={MAX_ISSUES_PER_SPRINT_LINK_BATCH} issue:"
     )
     for sp in planned_sprints:
-        task_ids = sprint_task_ids.get(sp.number, [])
-        n_batches = len(list(chunked(task_ids, MAX_ISSUES_PER_SPRINT_LINK_BATCH)))
-        lines.append(f"  {sp.name}  ({len(task_ids)} задач, {n_batches} батч(ей)): {', '.join(task_ids)}")
+        wbs_ids = sprint_wbs_ids.get(sp.number, [])
+        n_batches = len(list(chunked(wbs_ids, MAX_ISSUES_PER_SPRINT_LINK_BATCH)))
+        lines.append(f"  {sp.name}  ({len(wbs_ids)} WBS, {n_batches} батч(ей)): {', '.join(wbs_ids)}")
     lines.append("")
     lines.append(
-        "Нативное поле Jira Sprint (customfield_...) проставляется этой привязкой; имя спринта "
-        "остаётся также первой строкой в description Issue/Subtask (человекочитаемо, дублирует "
-        "нативное поле, не заменяет его)."
+        "Нативное поле Jira Sprint (customfield_...) проставляется этой привязкой на WBS-Issue; имя "
+        "спринта остаётся также первой строкой в description Issue/Subtask (человекочитаемо, "
+        "дублирует нативное поле, не заменяет его)."
     )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1190,14 +1178,19 @@ def execute_export(
 def link_issues_to_sprints(
     client,
     planned_sprints: list[PlannedSprint],
-    sprint_task_ids: dict[int, list[str]],
+    sprint_wbs_ids: dict[int, list[str]],
     key_by_placeholder: dict[str, str],
     real_sprint_id_by_number: dict[int, int],
     verbose: bool = True,
 ) -> None:
-    """Привязывает реально созданные Issue/Subtask к реально созданным Sprint
-    -- только после того, как оба существуют (--execute + --create-sprints).
-    Task, для которых в sprint_task_ids есть номер спринта, но нет ключа в
+    """Привязывает реально созданные WBS-Issue (не Subtask) к реально
+    созданным Sprint -- только после того, как оба существуют (--execute +
+    --create-sprints). Jira Sub-task не хранит Sprint независимо от
+    родителя (обнаружено эмпирически на живом TPT), поэтому привязываются
+    только WBS-Issue; с Этапа 5 v2 (упаковка WBS целиком) каждый из них
+    лежит ровно в одном спринте -- sprint_wbs_ids уже отфильтровал WBS,
+    у которых это не так (WBS-9.3/9.4, см. build_wbs_sprint). WBS, для
+    которых в sprint_wbs_ids есть номер спринта, но нет ключа в
     key_by_placeholder (issue не создан), не привязываются молча -- это
     печатается явно, тем же паттерном, что skipped_links в execute_export."""
 
@@ -1206,18 +1199,18 @@ def link_issues_to_sprints(
             print(msg)
 
     for sp in planned_sprints:
-        task_ids = sprint_task_ids.get(sp.number, [])
+        wbs_ids = sprint_wbs_ids.get(sp.number, [])
         issue_keys = []
-        for task_id in task_ids:
-            key = key_by_placeholder.get(task_id)
+        for wbs_id in wbs_ids:
+            key = key_by_placeholder.get(wbs_id)
             if key is None:
-                log(f"  ! Пропущена привязка {task_id} к Sprint {sp.name!r}: issue не создан")
+                log(f"  ! Пропущена привязка {wbs_id} к Sprint {sp.name!r}: issue не создан")
                 continue
             issue_keys.append(key)
         real_sprint_id = real_sprint_id_by_number[sp.number]
         for batch in chunked(issue_keys, MAX_ISSUES_PER_SPRINT_LINK_BATCH):
             client.add_issues_to_sprint(real_sprint_id, batch)
-            log(f"Привязано к Sprint {sp.name!r} (id={real_sprint_id}): {len(batch)} issue")
+            log(f"Привязано к Sprint {sp.name!r} (id={real_sprint_id}): {len(batch)} WBS-Issue")
 
 
 # ---------------------------------------------------------------------------
@@ -1588,22 +1581,6 @@ def run_selftest() -> None:
     else:
         raise AssertionError("отсутствие доски с Sprint должно останавливать --create-sprints")
 
-    # require_sprint_linking_possible: Jira не хранит Sprint у Subtask независимо от
-    # родителя -- --create-sprints в стандартном Subtask-режиме (flat_fallback=False)
-    # должен останавливаться явно, а не тихо создавать Sprint без реальной привязки.
-    try:
-        require_sprint_linking_possible(flat_fallback=False)
-    except SprintLinkingUnavailableError:
-        print(
-            "[selftest] require_sprint_linking_possible: Subtask-режим -- остановлено явной "
-            "ошибкой, привязка не делает вид, что удалась -- OK"
-        )
-    else:
-        raise AssertionError("--create-sprints в Subtask-режиме должен останавливаться явной ошибкой")
-
-    require_sprint_linking_possible(flat_fallback=True)  # не должно поднять исключение
-    print("[selftest] require_sprint_linking_possible: плоский режим -- пропущено без ошибки -- OK")
-
     for sp in planned_sprints:
         fake_sprints.create_sprint(
             board_found["id"], sp.name, f"{sp.start_date}T00:00:00.000Z", f"{sp.end_date}T00:00:00.000Z", goal=sp.goal
@@ -1620,18 +1597,20 @@ def run_selftest() -> None:
         f"имена совпадают с планом без изменений -- OK (привязка -- отдельный вызов link_issues_to_sprints, ниже)"
     )
 
-    sprint_task_ids = build_sprint_task_ids(plan)
-    assert set(sprint_task_ids) == {sp.number for sp in planned_sprints}, (
-        set(sprint_task_ids), {sp.number for sp in planned_sprints}
-    )
-    all_task_ids_in_plan = {t["id"] for t in flatten_tasks(plan)}
-    all_task_ids_grouped = {tid for ids in sprint_task_ids.values() for tid in ids}
-    assert all_task_ids_grouped == all_task_ids_in_plan, (
-        all_task_ids_in_plan - all_task_ids_grouped, all_task_ids_grouped - all_task_ids_in_plan
+    sprint_wbs_ids = build_sprint_wbs_ids(plan)
+    all_wbs_ids_in_plan = {wbs["id"] for m in plan["milestones"] for wbs in m["wbs"]}
+    all_wbs_ids_grouped = {wid for ids in sprint_wbs_ids.values() for wid in ids}
+    assert all_wbs_ids_grouped <= all_wbs_ids_in_plan, all_wbs_ids_grouped - all_wbs_ids_in_plan
+    excluded_wbs = all_wbs_ids_in_plan - all_wbs_ids_grouped
+    assert "WBS-9.3" in excluded_wbs, (
+        "WBS-9.3 (Гиперподдержка, Task-level 'После запуска') расходится по нескольким "
+        "спринтам в client-abc -- должен быть исключён, не привязан молча к одному из них",
+        excluded_wbs,
     )
     print(
-        f"[selftest] build_sprint_task_ids: {sum(len(v) for v in sprint_task_ids.values())} задач сгруппировано "
-        f"по {len(sprint_task_ids)} спринтам, покрывает все Task плана -- OK"
+        f"[selftest] build_sprint_wbs_ids: {len(all_wbs_ids_grouped)} WBS с единым спринтом сгруппировано "
+        f"по {len(sprint_wbs_ids)} спринтам; исключены как неоднозначные (в разных спринтах или без Task): "
+        f"{sorted(excluded_wbs)} -- OK"
     )
 
     assert list(chunked([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
@@ -1645,25 +1624,26 @@ def run_selftest() -> None:
         "без потери и дублирования элементов -- OK"
     )
 
-    sprint_report = format_sprint_dry_run_report(planned_sprints, board_found, project_key="TPT", sprint_task_ids=sprint_task_ids)
+    sprint_report = format_sprint_dry_run_report(planned_sprints, board_found, project_key="TPT", sprint_wbs_ids=sprint_wbs_ids)
     assert "DRY-RUN" in sprint_report
     assert f"{len(planned_sprints)} Sprint" in sprint_report
     assert "POST /rest/agile/1.0/sprint/{id}/issue" in sprint_report
     for sp in planned_sprints:
-        assert f"{len(sprint_task_ids.get(sp.number, []))} задач" in sprint_report, sp.name
+        assert f"{len(sprint_wbs_ids.get(sp.number, []))} WBS" in sprint_report, sp.name
     print(
-        "[selftest] --create-sprints dry-run отчёт: показывает превью привязки (без POST) -- OK"
+        "[selftest] --create-sprints dry-run отчёт: показывает превью привязки WBS-Issue (без POST) -- OK"
     )
 
-    # link_issues_to_sprints: реально созданные Issue/Subtask -> реально созданные Sprint,
-    # батчами <=MAX_ISSUES_PER_SPRINT_LINK_BATCH; пропавший ключ не привязывается молча.
+    # link_issues_to_sprints: реально созданные WBS-Issue (не Subtask) -> реально созданные
+    # Sprint, батчами <=MAX_ISSUES_PER_SPRINT_LINK_BATCH; пропавший ключ не привязывается молча.
     fake_link_client = FakeJiraClient(_company_managed_issue_types())
     real_sprint_id_by_number = {sp.number: 1000 + sp.number for sp in planned_sprints}
     key_by_placeholder_for_link = dict(key_by_placeholder)  # из шага 5 (execute через FakeJiraClient)
-    missing_task_id = next(iter(sprint_task_ids[1]))
-    del key_by_placeholder_for_link[missing_task_id]  # симулирует issue, который не создался
+    sprint_with_wbs = next(sp.number for sp in planned_sprints if sprint_wbs_ids.get(sp.number))
+    missing_wbs_id = next(iter(sprint_wbs_ids[sprint_with_wbs]))
+    del key_by_placeholder_for_link[missing_wbs_id]  # симулирует issue, который не создался
     link_issues_to_sprints(
-        fake_link_client, planned_sprints, sprint_task_ids, key_by_placeholder_for_link, real_sprint_id_by_number,
+        fake_link_client, planned_sprints, sprint_wbs_ids, key_by_placeholder_for_link, real_sprint_id_by_number,
         verbose=False,
     )
     linked_by_sprint: dict[int, list[str]] = {}
@@ -1671,15 +1651,15 @@ def run_selftest() -> None:
         linked_by_sprint.setdefault(sprint_id, []).extend(keys)
         assert len(keys) <= MAX_ISSUES_PER_SPRINT_LINK_BATCH, keys
     total_linked = sum(len(v) for v in linked_by_sprint.values())
-    total_expected = sum(len(v) for v in sprint_task_ids.values()) - 1  # минус пропавший ключ
+    total_expected = sum(len(v) for v in sprint_wbs_ids.values()) - 1  # минус пропавший ключ
     assert total_linked == total_expected, (total_linked, total_expected)
-    sprint1_id = real_sprint_id_by_number[1]
-    assert missing_task_id not in [
-        key_by_placeholder_for_link.get(t) for t in sprint_task_ids[1]
-    ], "пропавший task не должен попасть в привязку"
-    assert sprint1_id in linked_by_sprint, "спринт 1 должен получить хотя бы одну привязку"
+    linking_sprint_id = real_sprint_id_by_number[sprint_with_wbs]
+    assert missing_wbs_id not in [
+        key_by_placeholder_for_link.get(w) for w in sprint_wbs_ids[sprint_with_wbs]
+    ], "пропавший WBS не должен попасть в привязку"
+    assert linking_sprint_id in linked_by_sprint, f"спринт {sprint_with_wbs} должен получить хотя бы одну привязку"
     print(
-        f"[selftest] link_issues_to_sprints: {total_linked} issue привязано батчами (макс. "
+        f"[selftest] link_issues_to_sprints: {total_linked} WBS-Issue привязано батчами (макс. "
         f"{MAX_ISSUES_PER_SPRINT_LINK_BATCH}), issue без ключа пропущен явно, не молча -- OK"
     )
 
@@ -1797,18 +1777,11 @@ def main() -> None:
         print(f"ОШИБКА: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    if args.create_sprints:
-        try:
-            require_sprint_linking_possible(flat_fallback)
-        except SprintLinkingUnavailableError as exc:
-            print(f"ОСТАНОВЛЕНО: {exc}", file=sys.stderr)
-            sys.exit(2)
-
     export_plan = build_export_plan(plan, schema, flat_fallback, args.flat_child_link_type)
 
     planned_sprints: list[PlannedSprint] = []
     board: dict | None = None
-    sprint_task_ids: dict[int, list[str]] = {}
+    sprint_wbs_ids: dict[int, list[str]] = {}
     if args.create_sprints:
         if client is None:
             parser.error(
@@ -1822,13 +1795,13 @@ def main() -> None:
             print(f"ОСТАНОВЛЕНО: {exc}", file=sys.stderr)
             sys.exit(2)
         planned_sprints = build_planned_sprints(plan)
-        sprint_task_ids = build_sprint_task_ids(plan)
+        sprint_wbs_ids = build_sprint_wbs_ids(plan)
 
     if not args.execute:
         report_text = format_dry_run_report(export_plan, schema, args.project_key or "(из --schema-fixture)")
         if args.create_sprints:
             report_text += "\n" + format_sprint_dry_run_report(
-                planned_sprints, board, args.project_key, sprint_task_ids
+                planned_sprints, board, args.project_key, sprint_wbs_ids
             )
         if args.output:
             args.output.write_text(report_text, encoding="utf-8")
@@ -1859,7 +1832,7 @@ def main() -> None:
             real_sprint_id_by_number[sp.number] = created["id"]
             print(f"Создан Sprint: {created.get('id')}  {sp.name}  (goal={sp.goal!r})")
 
-        link_issues_to_sprints(client, planned_sprints, sprint_task_ids, key_by_placeholder, real_sprint_id_by_number)
+        link_issues_to_sprints(client, planned_sprints, sprint_wbs_ids, key_by_placeholder, real_sprint_id_by_number)
 
 
 if __name__ == "__main__":
