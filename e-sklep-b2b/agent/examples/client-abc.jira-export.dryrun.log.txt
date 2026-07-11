@@ -1,11 +1,11 @@
 === Jira-экспорт (Этап 8) -- DRY-RUN, вызовов на запись не было ===
 
-Проект: (из --schema-fixture)
+Проект: (из schema_fixture)
 issuetypes: Epic=Epic, Task=Task, Subtask=Sub-task
 Sprint field: customfield_10020; Epic Link field: customfield_10014
 Режим: Subtask (стандартный)
 
-Было бы создано: 1 Epic, 39 Issue, 88 Subtask, 129 Issue Link
+Было бы создано: 2 Epic (план + поддержка), 38 Issue, 85 Subtask, 1 Task (поддержка), 126 Issue Link
 
 [Epic] EPIC  "Внедрение Comarch e-Sklep B2B для клиента ABC"
   description:
@@ -15,7 +15,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
     Дата начала: 2026-08-03
     Дата запуска в эксплуатацию: 2026-10-26
     
-    target_launch_date -- дата запуска магазина в эксплуатацию (WBS-9.2, T-9.2.2), не дата закрытия всего проекта. Гиперподдержка (WBS-9.3) и формальное завершение проекта (WBS-9.4) продолжаются после этой даты (см. agent/sprint-mapping-rules.md, раздел "Гиперподдержка после запуска").
+    target_launch_date -- дата запуска магазина в эксплуатацию (WBS-9.2, T-9.2.2), не дата закрытия всего проекта. Формальное завершение проекта (WBS-9.4) продолжается после этой даты. Гиперподдержка ведётся отдельным Epic "Поддержка" в Jira (создаётся всегда при экспорте, Этап 8) и не входит в этот план -- WBS/Task, sprint-планирование и оценки трудозатрат её не описывают.
     
     ## Риски проекта
     
@@ -78,10 +78,15 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
     | **M9** | **Запуск и гиперподдержка** | Ввод решения в промышленную эксплуатацию и сопровождение запуска. |
     | WBS-9.1 | Подготовка к запуску | Выполнение мероприятий перед запуском. |
     | WBS-9.2 | Запуск в эксплуатацию | Ввод магазина в промышленную эксплуатацию. |
-    | WBS-9.3 | Гиперподдержка | Поддержка пользователей после запуска. |
     | WBS-9.4 | Завершение проекта | Формальное закрытие проекта. |
 
--- Issue (39) --
+[Epic] SUPPORT_EPIC  "Поддержка"  (создаётся всегда, вне плана)
+  description:
+    Гиперподдержка после формального закрытия проекта ведётся здесь, отдельно от плана внедрения -- WBS/Task, sprint-план и оценки трудозатрат её не описывают. Единственная задача ниже -- журнал поддержки: сюда заносятся обращения и решённые проблемы за весь период поддержки, без привязки к конкретному спринту или трудозатратам.
+  -- Task (1) -- без Subtask/Sprint/timetracking
+    SUPPORT_LOG_TASK  [Task]  "Журнал поддержки"  parent=SUPPORT_EPIC
+
+-- Issue (38) --
   WBS-1.1  [Task]  "Анализ бизнес-процессов"  labels=['M1']  parent=EPIC
   WBS-1.2  [Task]  "Анализ функциональных требований"  labels=['M1']  parent=EPIC
   WBS-1.3  [Task]  "Анализ интеграций"  labels=['M1']  parent=EPIC
@@ -119,10 +124,9 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   WBS-8.3  [Task]  "Подтверждение готовности пользователей"  labels=['M8']  parent=EPIC
   WBS-9.1  [Task]  "Подготовка к запуску"  labels=['M9']  parent=EPIC
   WBS-9.2  [Task]  "Запуск в эксплуатацию"  labels=['M9']  parent=EPIC
-  WBS-9.3  [Task]  "Гиперподдержка"  labels=['M9']  parent=EPIC
   WBS-9.4  [Task]  "Завершение проекта"  labels=['M9']  parent=EPIC
 
--- Subtask (88) --
+-- Subtask (85) --
   T-1.1.1  [Sub-task]  "Провести интервью по бизнес-процессам"  parent=WBS-1.1  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='1h 30m'
   T-1.1.2  [Sub-task]  "Подготовить описание бизнес-процессов проекта"  parent=WBS-1.1  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-1.2.1  [Sub-task]  "Провести интервью по функциональным требованиям"  parent=WBS-1.2  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='1h 30m'
@@ -206,13 +210,10 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-9.1.2  [Sub-task]  "Перевести автоматическую синхронизацию из тестового режима в промышленный график"  parent=WBS-9.1  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='2h'
   T-9.2.1  [Sub-task]  "Выполнить контрольную синхронизацию перед открытием магазина для покупателей"  parent=WBS-9.2  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='1h 15m'
   T-9.2.2  [Sub-task]  "Объявить магазин доступным для покупателей"  parent=WBS-9.2  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='30m'
-  T-9.3.1  [Sub-task]  "Определить период и порядок гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'  originalEstimate='45m'
-  T-9.3.2  [Sub-task]  "Отслеживать журнал событий синхронизации в период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'
-  T-9.3.3  [Sub-task]  "Завершить период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'  originalEstimate='30m'
-  T-9.4.1  [Sub-task]  "Подготовить итоговый отчет по проекту"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 5 (2026-09-28–2026-10-04)'  originalEstimate='2h'
-  T-9.4.2  [Sub-task]  "Формально закрыть проект"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 5 (2026-09-28–2026-10-04)'  originalEstimate='30m'
+  T-9.4.1  [Sub-task]  "Подготовить итоговый отчет по проекту"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-20)'  originalEstimate='2h'
+  T-9.4.2  [Sub-task]  "Формально закрыть проект"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-20)'  originalEstimate='30m'
 
--- Issue Link (129) --
+-- Issue Link (126) --
   T-1.1.1  --[Blocks]-->  T-1.1.2
   T-1.2.1  --[Blocks]-->  T-1.2.2
   T-1.3.1  --[Blocks]-->  T-1.3.2
@@ -298,9 +299,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-9.1.1  --[Blocks]-->  T-9.1.2
   T-9.1.2  --[Blocks]-->  T-9.2.1
   T-9.2.1  --[Blocks]-->  T-9.2.2
-  T-9.3.1  --[Blocks]-->  T-9.3.2
-  T-9.3.2  --[Blocks]-->  T-9.3.3
-  T-9.3.3  --[Blocks]-->  T-9.4.1
+  T-9.2.2  --[Blocks]-->  T-9.4.1
   T-9.4.1  --[Blocks]-->  T-9.4.2
   T-1.1.2  --[Blocks]-->  WBS-1.5
   T-1.2.2  --[Blocks]-->  WBS-6.1
@@ -340,5 +339,4 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-8.2.3  --[Blocks]-->  WBS-8.3
   T-8.3.1  --[Blocks]-->  T-9.1.1
   T-9.1.2  --[Blocks]-->  WBS-9.2
-  T-9.2.2  --[Blocks]-->  WBS-9.3
-  T-9.3.3  --[Blocks]-->  WBS-9.4
+  T-9.2.2  --[Blocks]-->  WBS-9.4

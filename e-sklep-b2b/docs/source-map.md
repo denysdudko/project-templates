@@ -47,5 +47,4 @@
 | WBS-8.3 | M8 — Обучение пользователей | Подтверждение готовности пользователей | — | ⚠️ Internal (полностью) |
 | WBS-9.1 | M9 — Запуск и гиперподдержка | Подготовка к запуску | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/lista-czynnosci-na-start/)<br>[pomoc.comarch.pl...](https://pomoc.comarch.pl/optima/pl/2026/dokumentacja/pytanie-34608-jak-odbywa-sie-synchronizacja-pomiedzy-comarch-erp-optima-a-comarch-e-sklep/) | ✅ |
 | WBS-9.2 | M9 — Запуск и гиперподдержка | Запуск в эксплуатацию | [pomoc.comarch.pl...](https://pomoc.comarch.pl/optima/pl/2026/dokumentacja/pytanie-34608-jak-odbywa-sie-synchronizacja-pomiedzy-comarch-erp-optima-a-comarch-e-sklep/) | ✅ + ⚠️ Internal (частично) |
-| WBS-9.3 | M9 — Запуск и гиперподдержка | Гиперподдержка | [pomoc.comarchesklep.pl...](https://pomoc.comarchesklep.pl/artykul/synchronizacja-comarch-e-sklep-z-systemami-comarch-erp-komunikaty/) | ✅ + ⚠️ Internal (частично) |
 | WBS-9.4 | M9 — Запуск и гиперподдержка | Завершение проекта | — | ⚠️ Internal (полностью) |
