@@ -1,11 +1,11 @@
 === Jira-экспорт (Этап 8) -- DRY-RUN, вызовов на запись не было ===
 
-Проект: ESK
+Проект: (из --schema-fixture)
 issuetypes: Epic=Epic, Task=Task, Subtask=Sub-task
 Sprint field: customfield_10020; Epic Link field: customfield_10014
 Режим: Subtask (стандартный)
 
-Было бы создано: 1 Epic, 39 Issue, 87 Subtask, 125 Issue Link
+Было бы создано: 1 Epic, 39 Issue, 88 Subtask, 129 Issue Link
 
 [Epic] EPIC  "Внедрение Comarch e-Sklep B2B для клиента ABC"
   description:
@@ -122,10 +122,10 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   WBS-9.3  [Task]  "Гиперподдержка"  labels=['M9']  parent=EPIC
   WBS-9.4  [Task]  "Завершение проекта"  labels=['M9']  parent=EPIC
 
--- Subtask (87) --
+-- Subtask (88) --
   T-1.1.1  [Sub-task]  "Провести интервью по бизнес-процессам"  parent=WBS-1.1  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='1h 30m'
   T-1.1.2  [Sub-task]  "Подготовить описание бизнес-процессов проекта"  parent=WBS-1.1  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
-  T-1.2.1  [Sub-task]  "Провести интервью по функциональным требованиям"  parent=WBS-1.2  labels=['M1']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='1h 30m'
+  T-1.2.1  [Sub-task]  "Провести интервью по функциональным требованиям"  parent=WBS-1.2  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='1h 30m'
   T-1.2.2  [Sub-task]  "Подготовить перечень функциональных требований"  parent=WBS-1.2  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-1.3.1  [Sub-task]  "Провести интервью по интеграциям"  parent=WBS-1.3  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='1h 30m'
   T-1.3.2  [Sub-task]  "Подготовить перечень интеграций проекта"  parent=WBS-1.3  labels=['M1']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
@@ -153,6 +153,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-4.1.2  [Sub-task]  "Настроить языковые версии и валюты магазина"  parent=WBS-4.1  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.1.3  [Sub-task]  "Настроить домен магазина"  parent=WBS-4.1  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.2.1  [Sub-task]  "Согласовать графический шаблон магазина"  parent=WBS-4.2  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='45m'
+  T-4.2.2  [Sub-task]  "Установить или импортировать выбранный шаблон"  parent=WBS-4.2  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.3.1  [Sub-task]  "Согласовать перечень способов оплаты и их реквизиты"  parent=WBS-4.3  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='45m'
   T-4.3.2  [Sub-task]  "Активировать способы оплаты в панели администратора"  parent=WBS-4.3  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.4.1  [Sub-task]  "Согласовать страны/зоны доставки и способы доставки"  parent=WBS-4.4  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='45m'
@@ -160,12 +161,11 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-4.5.1  [Sub-task]  "Настроить почтовый аккаунт для отправки писем из магазина"  parent=WBS-4.5  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.5.2  [Sub-task]  "Настроить e-mail-уведомления для администраторов"  parent=WBS-4.5  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='2h'
   T-4.5.3  [Sub-task]  "Подготовить и опубликовать регламент (Regulamin) магазина"  parent=WBS-4.5  labels=['M4']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='10h'
-  T-4.5-C1  [Sub-task]  "Подготовить дополнительный шаблон письма для уведомлений о статусе заказа B2B"  parent=WBS-4.5  labels=['M4']  sprint='Спринт 2 (2026-08-17–2026-08-30)'
   T-5.1.1  [Sub-task]  "Согласовать перечень товаров и параметры их публикации"  parent=WBS-5.1  labels=['M5']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='45m'
   T-5.1.2  [Sub-task]  "Включить признак "Udostępniaj w Comarch e-Sklep/e-Sale" на карточках товаров"  parent=WBS-5.1  labels=['M5']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='10h'
   T-5.2.1  [Sub-task]  "Согласовать структуру групп товаров (дерево категорий) для e-Sklep"  parent=WBS-5.2  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='45m'
   T-5.2.2  [Sub-task]  "Создать структуру групп товаров в ERP Optima"  parent=WBS-5.2  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='10h'
-  T-5.3.1  [Sub-task]  "Подготовить названия, описания и фотографии товаров в ERP Optima"  parent=WBS-5.3  labels=['M5']  sprint='Спринт 1 (2026-08-03–2026-08-16)'  originalEstimate='10h'
+  T-5.3.1  [Sub-task]  "Подготовить названия, описания и фотографии товаров в ERP Optima"  parent=WBS-5.3  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='10h'
   T-5.4.1  [Sub-task]  "Согласовать перечень атрибутов товаров для e-Sklep"  parent=WBS-5.4  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='45m'
   T-5.4.2  [Sub-task]  "Создать атрибуты в ERP Optima и включить их публикацию в e-Sklep"  parent=WBS-5.4  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='10h'
   T-5.5.1  [Sub-task]  "Выполнить первую синхронизацию товаров с e-Sklep"  parent=WBS-5.5  labels=['M5']  sprint='Спринт 2 (2026-08-17–2026-08-30)'  originalEstimate='1h 15m'
@@ -201,17 +201,18 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-8.2.1  [Sub-task]  "Провести презентацию возможностей системы"  parent=WBS-8.2  labels=['M8']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='3h'
   T-8.2.2  [Sub-task]  "Разобрать с пользователями типовые рабочие сценарии"  parent=WBS-8.2  labels=['M8']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='3h'
   T-8.2.3  [Sub-task]  "Ответить на вопросы участников обучения"  parent=WBS-8.2  labels=['M8']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='3h'
+  T-8.3.1  [Sub-task]  "Собрать подтверждение готовности от участников обучения"  parent=WBS-8.3  labels=['M8']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='30m'
   T-9.1.1  [Sub-task]  "Свести финальный чек-лист готовности магазина к запуску"  parent=WBS-9.1  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='2h'
   T-9.1.2  [Sub-task]  "Перевести автоматическую синхронизацию из тестового режима в промышленный график"  parent=WBS-9.1  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='2h'
   T-9.2.1  [Sub-task]  "Выполнить контрольную синхронизацию перед открытием магазина для покупателей"  parent=WBS-9.2  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='1h 15m'
   T-9.2.2  [Sub-task]  "Объявить магазин доступным для покупателей"  parent=WBS-9.2  labels=['M9']  sprint='Спринт 3 (2026-08-31–2026-09-13)'  originalEstimate='30m'
-  T-9.3.1  [Sub-task]  "Определить период и порядок гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-20)'  originalEstimate='45m'
-  T-9.3.2  [Sub-task]  "Отслеживать журнал событий синхронизации в период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 5 (2026-09-21–2026-10-04, Гиперподдержка)'
-  T-9.3.3  [Sub-task]  "Завершить период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 6 (2026-10-05–2026-10-11)'  originalEstimate='30m'
-  T-9.4.1  [Sub-task]  "Подготовить итоговый отчет по проекту"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 6 (2026-10-05–2026-10-11)'  originalEstimate='2h'
-  T-9.4.2  [Sub-task]  "Формально закрыть проект"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 6 (2026-10-05–2026-10-11)'  originalEstimate='30m'
+  T-9.3.1  [Sub-task]  "Определить период и порядок гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'  originalEstimate='45m'
+  T-9.3.2  [Sub-task]  "Отслеживать журнал событий синхронизации в период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'
+  T-9.3.3  [Sub-task]  "Завершить период гиперподдержки"  parent=WBS-9.3  labels=['M9']  sprint='Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)'  originalEstimate='30m'
+  T-9.4.1  [Sub-task]  "Подготовить итоговый отчет по проекту"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 5 (2026-09-28–2026-10-04)'  originalEstimate='2h'
+  T-9.4.2  [Sub-task]  "Формально закрыть проект"  parent=WBS-9.4  labels=['M9']  sprint='Спринт 5 (2026-09-28–2026-10-04)'  originalEstimate='30m'
 
--- Issue Link (125) --
+-- Issue Link (129) --
   T-1.1.1  --[Blocks]-->  T-1.1.2
   T-1.2.1  --[Blocks]-->  T-1.2.2
   T-1.3.1  --[Blocks]-->  T-1.3.2
@@ -242,6 +243,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-4.1.1  --[Blocks]-->  T-4.1.2
   T-4.1.2  --[Blocks]-->  T-4.1.3
   T-4.1.1  --[Blocks]-->  T-4.2.1
+  T-4.2.1  --[Blocks]-->  T-4.2.2
   T-2.4.1  --[Blocks]-->  T-4.3.1
   T-4.3.1  --[Blocks]-->  T-4.3.2
   T-4.4.1  --[Blocks]-->  T-4.4.2
@@ -291,6 +293,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-8.1.2  --[Blocks]-->  T-8.2.1
   T-8.2.1  --[Blocks]-->  T-8.2.2
   T-8.2.2  --[Blocks]-->  T-8.2.3
+  T-8.2.3  --[Blocks]-->  T-8.3.1
   T-7.4.2  --[Blocks]-->  T-9.1.1
   T-9.1.1  --[Blocks]-->  T-9.1.2
   T-9.1.2  --[Blocks]-->  T-9.2.1
@@ -319,6 +322,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-2.3.2  --[Blocks]-->  T-3.2.1
   T-3.3.2  --[Blocks]-->  T-4.1.1
   T-4.1.3  --[Blocks]-->  T-9.1.1
+  T-4.2.2  --[Blocks]-->  T-7.1.1
   T-4.4.2  --[Blocks]-->  T-7.1.1
   T-4.5.3  --[Blocks]-->  T-7.1.1
   T-5.6.1  --[Blocks]-->  T-6.1.1
@@ -334,10 +338,7 @@ Sprint field: customfield_10020; Epic Link field: customfield_10014
   T-7.4.2  --[Blocks]-->  T-8.1.1
   T-8.1.2  --[Blocks]-->  WBS-8.2
   T-8.2.3  --[Blocks]-->  WBS-8.3
+  T-8.3.1  --[Blocks]-->  T-9.1.1
   T-9.1.2  --[Blocks]-->  WBS-9.2
   T-9.2.2  --[Blocks]-->  WBS-9.3
   T-9.3.3  --[Blocks]-->  WBS-9.4
-
--- Пропущенные связи (1) -- не потеряны молча, требуют внимания консультанта --
-  ! T-4.2.1.used_by -> 'T-4.2.2': ссылается на несуществующий в плане ID
-

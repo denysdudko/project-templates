@@ -3255,8 +3255,6 @@
     }
   },
   "sprint_plan": {
-    "sprint_length_weeks": 2,
-    "capacity_per_sprint_hours": 80,
     "sprints": [
       {
         "sprint": 1,
@@ -3374,43 +3372,27 @@
       {
         "sprint": 4,
         "task_ids": [
-          "T-9.3.1"
+          "T-9.3.1",
+          "T-9.3.2",
+          "T-9.3.3"
         ],
-        "hours_used": 0.75,
+        "hours_used": 1.25,
         "start_date": "2026-09-14",
-        "end_date": "2026-09-20",
-        "duration_weeks": 1,
-        "name": "Спринт 4 (2026-09-14–2026-09-20)"
+        "end_date": "2026-09-27",
+        "duration_weeks": 2,
+        "name": "Спринт 4 (2026-09-14–2026-09-27, Гиперподдержка)"
       },
       {
         "sprint": 5,
-        "task_ids": [],
-        "hours_used": 0.0,
-        "reserved": [
-          {
-            "task_id": "T-9.3.2",
-            "task_type": "support_monitoring",
-            "hours_per_week": 3.0,
-            "basis": "support_monitoring: недельная нагрузка, не point-оценка на Task"
-          }
-        ],
-        "start_date": "2026-09-21",
-        "end_date": "2026-10-04",
-        "duration_weeks": 2,
-        "name": "Спринт 5 (2026-09-21–2026-10-04, Гиперподдержка)"
-      },
-      {
-        "sprint": 6,
         "task_ids": [
-          "T-9.3.3",
           "T-9.4.1",
           "T-9.4.2"
         ],
-        "hours_used": 3.0,
-        "start_date": "2026-10-05",
-        "end_date": "2026-10-11",
+        "hours_used": 2.5,
+        "start_date": "2026-09-28",
+        "end_date": "2026-10-04",
         "duration_weeks": 1,
-        "name": "Спринт 6 (2026-10-05–2026-10-11)"
+        "name": "Спринт 5 (2026-09-28–2026-10-04)"
       }
     ],
     "task_sprint": {
@@ -3498,10 +3480,10 @@
       "T-9.2.1": 3,
       "T-9.2.2": 3,
       "T-9.3.1": 4,
-      "T-9.3.2": 5,
-      "T-9.3.3": 6,
-      "T-9.4.1": 6,
-      "T-9.4.2": 6
+      "T-9.3.2": 4,
+      "T-9.3.3": 4,
+      "T-9.4.1": 5,
+      "T-9.4.2": 5
     },
     "launch_task_id": "T-9.2.2",
     "total_sprints_used": 3,
