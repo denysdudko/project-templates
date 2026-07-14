@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.4 — jira.project_key в input JSON (опционально, обратная совместимость)
+- Добавлено опциональное поле `jira.project_key` в `agent/input-schema.json` --
+  Jira Project Key теперь можно хранить в самом input JSON клиента, а не вводить
+  отдельно при каждом запуске.
+- `agent/create_project.py`: если `--project-key` не передан флагом, берётся из
+  `jira.project_key` input JSON; если нет ни того, ни другого -- явная ошибка
+  ("--project-key обязателен (или укажите jira.project_key в input JSON)").
+  Явный флаг `--project-key` по-прежнему имеет приоритет над значением из JSON.
+- `agent/client-input-form.html` / `agent/run_form.py` -- не изменялись, явное
+  решение, а не упущение: в форме нет механизма загрузки существующего input JSON
+  обратно (только сборка полей -> скачивание/отправка), поэтому предзаполнение
+  поля `jira_project_key` неприменимо. `run_form.py` уже вызывает
+  `create_project.run_pipeline()` напрямую с `project_key` из поля формы, минуя
+  `create_project.main()` и его новый JSON-фолбэк, — конфликта приоритетов между
+  полем формы и `jira.project_key` не существует структурно.
+- `agent/create-project.bat` -- не создаётся и не коммитится: такого файла нет и
+  не было в репозитории ни в одной версии; документированный процесс
+  (`docs/form-usage.md`, v3.3) сознательно использует только `python run_form.py`.
+- `schema/milestones_wbs.yaml`, `tasks/M*_tasks.yaml` не затронуты.
+
 ## v3.3 — Инструкция консультанту по запуску формы под Windows (docs/form-usage.md)
 - Добавлен `docs/form-usage.md` — пошаговая инструкция для консультанта на Windows:
   проверка установки Python (`python --version`, PATH), настройка `agent\.env` из

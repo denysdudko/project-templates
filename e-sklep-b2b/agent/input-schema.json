@@ -60,6 +60,15 @@
       "type": "string",
       "format": "date",
       "description": "Желаемая дата запуска, формат YYYY-MM-DD"
+    },
+    "jira": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "type": "string",
+          "description": "Ключ существующего Jira-проекта (например TPT). Опционально: можно также передать через --project-key при запуске -- флаг имеет приоритет над значением из JSON."
+        }
+      }
     }
   }
 }
