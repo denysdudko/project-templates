@@ -257,6 +257,11 @@
       <label class="req" for="jira_project_key">Jira Project Key</label>
       <input type="text" id="jira_project_key" placeholder="напр. ESK">
       <p class="hint">Ключ уже существующего Jira-проекта. Email/токен для подключения сервер берёт из <code>agent/.env</code>, здесь не указываются.</p>
+
+      <label for="create_sprints">
+        <input type="checkbox" id="create_sprints">
+        Создать Sprint в Jira (--create-sprints)
+      </label>
     </div>
 
     <div class="section">
@@ -455,6 +460,7 @@ async function createPlan() {
 
   const input_json = JSON.parse(document.getElementById('output').textContent);
   const project_key = currentProjectKey();
+  const create_sprints = document.getElementById('create_sprints').checked;
 
   createPlanBtn.disabled = true;
   executeBtn.style.display = 'none';
@@ -463,7 +469,7 @@ async function createPlan() {
   reportEl.textContent = '';
 
   try {
-    const data = await postAction('/plan', { input_json, project_key });
+    const data = await postAction('/plan', { input_json, project_key, create_sprints });
     reportEl.textContent = data.report || '(пустой отчёт)';
     if (data.ok) {
       reportStatus.textContent = 'dry-run готов';
@@ -479,7 +485,7 @@ async function createPlan() {
     reportEl.textContent = 'Локальный сервер недоступен (запущен ли python3 agent/run_form.py?).\n' +
       'Используйте «Скачать .json» и запустите вручную:\n' +
       'python3 agent/create_project.py --input <файл>.json --project-key ' + (project_key || '...') +
-      ' --jira-url ... --email ... --api-token ...';
+      ' --jira-url ... --email ... --api-token ...' + (create_sprints ? ' --create-sprints' : '');
   } finally {
     createPlanBtn.disabled = false;
   }
@@ -490,6 +496,7 @@ async function executePlan() {
   const reportStatus = document.getElementById('reportStatus');
   const executeBtn = document.getElementById('executeBtn');
   const project_key = currentProjectKey();
+  const create_sprints = document.getElementById('create_sprints').checked;
 
   if (!confirm('Реально создать Epic/Issue/Subtask в Jira-проекте ' + project_key + '? Действие необратимо.')) {
     return;
@@ -502,7 +509,7 @@ async function executePlan() {
   reportStatus.className = 'status';
 
   try {
-    const data = await postAction('/execute', { input_json, project_key });
+    const data = await postAction('/execute', { input_json, project_key, create_sprints });
     reportEl.textContent = data.report || '(пустой отчёт)';
     reportStatus.textContent = data.ok ? 'создано в Jira' : 'ошибка';
     reportStatus.className = 'status ' + (data.ok ? 'ok' : 'err');

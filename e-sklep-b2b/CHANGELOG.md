@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.5 -- create_sprints теперь доступен через форму
+- agent/client-input-form.html: добавлен чекбокс "Создать Sprint в Jira
+  (--create-sprints)" рядом с Jira Project Key.
+- agent/run_form.py: create_sprints теперь читается из тела запроса
+  (POST /plan, POST /execute), а не только из серверной настройки при старте --
+  раньше включить эту опцию через форму было физически невозможно (не было ни
+  чекбокса, ни CLI-флага у run_form.py), консультант мог получить Epic/Issues без
+  Sprint, не понимая почему. Обратная совместимость: если ключ create_sprints
+  отсутствует в теле (как в --selftest), используется прежний дефолт False.
+- schema/milestones_wbs.yaml, tasks/M*_tasks.yaml не затронуты.
+
 ## v3.4 — jira.project_key в input JSON (опционально, обратная совместимость)
 - Добавлено опциональное поле `jira.project_key` в `agent/input-schema.json` --
   Jira Project Key теперь можно хранить в самом input JSON клиента, а не вводить
