@@ -134,6 +134,8 @@ class FormRequestHandler(http.server.BaseHTTPRequestHandler):
         if not input_json or not project_key:
             return {"ok": False, "report": "ОШИБКА: input_json и project_key обязательны в теле запроса"}
 
+        create_sprints = bool(body.get("create_sprints", self.create_sprints))
+
         buf = io.StringIO()
         ok = True
         try:
@@ -147,7 +149,7 @@ class FormRequestHandler(http.server.BaseHTTPRequestHandler):
                     runs_dir=self.runs_dir,
                     execute=execute,
                     confirm=execute,  # клик по кнопке «Выполнить» в форме -- и есть подтверждение человеком
-                    create_sprints=self.create_sprints,
+                    create_sprints=create_sprints,
                 )
         except SystemExit as exc:
             ok = False
