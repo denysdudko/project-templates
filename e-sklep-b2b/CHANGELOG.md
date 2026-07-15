@@ -1,5 +1,72 @@
 # Changelog
 
+## v3.6 -- Украинский (UA) вариант контента + --lang в форме/пайплайне
+- Добавлены `schema/milestones_wbs.ua.yaml` и `tasks/M1..M9_tasks.ua.yaml` --
+  украинский перевод всех Milestone/WBS/Task (названия, описания, Interview
+  Checklist, Verification Checklist). ID, `depends_on`, `used_by`, `performer`,
+  `source` -- идентичны RU-версии 1:1 (проверено скриптом сравнения ID и
+  структурных полей между RU/UA по всем 9 файлам); это перевод контента, не
+  переработка структуры.
+- `agent/assemble_plan.py`: новый `--lang ru|ua` (по умолчанию `ru`, также
+  доступен параметром `assemble_plan(..., lang=...)`). `load_template(lang)`
+  резолвит `schema/milestones_wbs{.lang}.yaml` / `tasks/M*_tasks{.lang}.yaml`.
+  `plan["meta"]["lang"]` сохраняет выбранный язык для последующих этапов
+  пайплайна (jira_export.py читает его оттуда, отдельного `--lang` там не
+  появилось -- см. ниже).
+  - **Важная находка**: keyword-эвристика классификации типа Task
+    (`classify_task`, `effort-estimates.yaml`) сопоставляет русские глаголы с
+    началом `Task.name` -- на переведённом UA-тексте она бы не совпала ни для
+    одной Task и `build_effort_estimates` падал бы `ValueError` при
+    `--lang ua`. Исправлено: классификация всегда идёт по RU-названию Task (по
+    ID, через отдельно загружаемый RU-шаблон), тип и часы применяются к Task
+    выбранного языка -- тип задачи есть методологическое свойство Task ID, не
+    свойство текста на конкретном языке. `effort_estimates` теперь идентичны
+    между `--lang ru` и `--lang ua` при одинаковом input (проверено в
+    `--selftest`).
+  - Динамически генерируемые Task для WBS-6.4 (по клиентским `integrations`,
+    не читаются из `tasks/M6_tasks{.lang}.yaml`) тоже локализованы --
+    `INTEGRATION_TASK_TEXT["ru"/"ua"]`, раньше были захардкожены только на RU.
+  - `--lang ru` (по умолчанию, без флага) -- поведение не изменилось: то же
+    имя файла (`load_template("ru")` -> суффикс `""`), `ru_name_by_id` не
+    строится, если `lang == "ru"`.
+  - `--selftest`: новый блок проверок -- ID Milestone/WBS/Task совпадают 1:1
+    между `--lang ru`/`--lang ua` (включая динамические Task WBS-6.4),
+    `effort_estimates` идентичны, тексты `Task.name` отличаются (перевод
+    применился, в т.ч. для WBS-6.4).
+- `agent/create_project.py`: новый `--lang ru|ua` в CLI. Приоритет ровно как у
+  `jira.project_key` (v3.4): явный `--lang` > поле `lang` в input JSON > `ru`
+  по умолчанию. `run_pipeline()` резолвит приоритет сам (новый keyword-параметр
+  `lang`) -- `run_form.py` не передаёт его вовсе и продолжает работать без
+  изменений: значение автоматически берётся из `input_json["lang"]` тела
+  запроса.
+- `agent/jira_export.py`: `--lang` не добавлялся -- скрипт не читает
+  `milestones_wbs.yaml`/`tasks/M*_tasks.yaml` напрямую, только уже собранный
+  `plan` (язык контента в нём уже "запечён" Этапом 6). Единственное
+  исключение -- Epic "Поддержка"/"Підтримка" (`SUPPORT_EPIC_SUMMARY`,
+  `SUPPORT_LOG_TASK_SUMMARY`, `SUPPORT_EPIC_DESCRIPTION_TEXT`), который
+  создаётся ВСЕГДА вне `plan["milestones"]` и был захардкожен только на RU;
+  теперь это `*_BY_LANG` словари, `build_export_plan()` резолвит язык из
+  `plan["meta"]["lang"]` (фолбэк `"ru"`, если ключа нет -- совместимость со
+  старыми `plan.json`, собранными до этой правки). Остальные хардкод-строки
+  Jira-экспорта (заголовки ADF-таблиц "Риск"/"Затрагивает"/"ID"/"Название"/
+  "Описание", подписи "Заказчик:"/"Цель:" и т.п.) не локализованы -- вне
+  скоупа этой правки, зафиксировать отдельно при необходимости полной
+  UA-локализации отчёта.
+- `agent/input-schema.json`: новое опциональное свойство `lang` (`enum:
+  ["ru", "ua"]`, `default: "ru"`), тот же паттерн документирования, что
+  `jira.project_key` в v3.4.
+- `agent/client-input-form.html`: добавлен выбор языка (радиокнопки
+  "Русский"/"Українська", по умолчанию "Русский") рядом с полем "Заказчик";
+  включён в собираемый JSON как `"lang": "ru"|"ua"`.
+- `agent/run_form.py`: изменений не потребовалось -- `input_json` из тела
+  запроса передаётся в `create_project.run_pipeline()` без фильтрации полей,
+  `lang` внутри него подхватывается автоматически.
+- Проверено сквозным HTTP-тестом через `run_form.py`: JSON с `"lang": "ua"`
+  без явного `--lang` -> dry-run отчёт на украинском (Milestones/WBS/Task);
+  `--execute` (FakeJiraClient) -> Epic "Підтримка"/Task "Журнал підтримки"
+  создаются с украинским `summary`.
+- `schema/milestones_wbs.yaml`, `tasks/M*_tasks.yaml` (RU) не изменены.
+
 ## v3.5 -- create_sprints теперь доступен через форму
 - agent/client-input-form.html: добавлен чекбокс "Создать Sprint в Jira
   (--create-sprints)" рядом с Jira Project Key.

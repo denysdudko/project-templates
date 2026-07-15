@@ -1,0 +1,337 @@
+milestone: M2
+name: Підготовка ERP
+
+tasks:
+
+# ===================================================================
+# WBS-2.1 Підготовка Comarch ERP Optima до інтеграції
+# ===================================================================
+
+- wbs: WBS-2.1
+
+  tasks:
+
+    - id: T-2.1.1
+      name: Перевірити відповідність ERP Optima системним вимогам для e-Handel
+
+      description: >
+        Перевірити наявність на сервері ERP Optima компонентів NET
+        Framework 4.5, Microsoft Web Services Enhancements (WSE) 3.0
+        Runtime і SQLXML 4.0, а також наявність у ліцензії модулів
+        Kasa/Bank (KB) і Handel (HA), мінімально необхідних для
+        роботи з Comarch e-Sklep.
+
+      performer: Консультант
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/wspolpraca-z-comarch-e-sklep/
+
+      result:
+        - Підтверджена відповідність ERP Optima системним вимогам e-Handel
+
+      used_by:
+        - T-2.1.2
+
+      interview_checklist:
+        - Чи встановлені на сервері ERP Optima компоненти NET Framework 4.5, WSE 3.0 Runtime і SQLXML 4.0?
+        - Чи активні в ліцензії модулі Kasa/Bank (KB) і Handel (HA)?
+
+      verification_checklist:
+        - Перевірити, що всі необхідні компоненти встановлені.
+        - Перевірити, що модулі KB і HA активні в ліцензії ERP Optima.
+
+    - id: T-2.1.2
+      name: Отримати дані для генерації ключа обміну
+
+      description: >
+        Отримати з листа активації Comarch e-Sklep/e-Sale дані,
+        необхідні для генерації ключа обміну: назву компанії,
+        назву магазину та PIN (пароль).
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.1.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Підтверджений комплект даних для генерації ключа обміну (назва компанії, назва магазину, PIN)
+
+      used_by:
+        - T-2.4.3
+
+      interview_checklist:
+        - Чи збережений у замовника лист з даними для генерації ключа обміну (назва компанії, назва магазину, PIN)?
+
+      verification_checklist:
+        - "Перевірити, що отримано всі три параметри: назву компанії, назву магазину, PIN."
+
+# ===================================================================
+# WBS-2.2 Налаштування інтеграції e-Sklep
+# ===================================================================
+
+- wbs: WBS-2.2
+
+  tasks:
+
+    - id: T-2.2.1
+      name: Узгодити валюту та ціну за замовчуванням (вкладка "Ogólne")
+
+      description: >
+        Узгодити із замовником значення поля "Domyślna waluta"
+        (валюта відображення цін в e-Sklep), склад поля "Dostępne
+        waluty", якщо потрібна мультивалютність, і значення поля
+        "Cena domyślna" (тип ціни з ERP Optima, що передається до
+        магазину).
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.1.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджені параметри валюти та ціни за замовчуванням
+
+      used_by:
+        - T-2.2.2
+
+      interview_checklist:
+        - У якій валюті за замовчуванням мають відображатися ціни в e-Sklep?
+        - Чи потрібна покупцю можливість вибору декількох валют в e-Sklep, і якщо так — яких саме?
+        - Яка ціна з прайс-листа ERP Optima має використовуватися як "Cena domyślna" для e-Sklep?
+
+      verification_checklist:
+        - Перевірити, що валюта за замовчуванням узгоджена та зафіксована як остаточна (після першої синхронізації змінити її неможливо).
+        - Перевірити, що склад додаткових валют визначено, якщо він потрібен.
+        - Перевірити, що визначено ціну за замовчуванням для e-Sklep.
+
+    - id: T-2.2.2
+      name: Узгодити нумерацію замовлень і позицію вартості доставки (вкладка "Ogólne")
+
+      description: >
+        Узгодити схему нумерації ("Definicja RO", "Seria") для
+        замовлень, що надходять з e-Sklep, і підтвердити послугову
+        позицію для поля "Koszt przesyłki" (за замовчуванням
+        KOSZT_PRZESYŁKI_E_COMMERCE).
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.2.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджені схема нумерації RO та позиція вартості доставки
+
+      used_by:
+        - T-3.1.2
+
+      interview_checklist:
+        - За якою схемою нумерації (Definicja RO, Seria) мають нумеруватися замовлення, що надходять з e-Sklep?
+        - Чи потрібна окрема послугова позиція для вартості доставки, чи підходить стандартна KOSZT_PRZESYŁKI_E_COMMERCE?
+
+      verification_checklist:
+        - Перевірити, що визначено схему нумерації RO та серію.
+        - Перевірити, що визначено послугову позицію для вартості доставки.
+
+# ===================================================================
+# WBS-2.3 Налаштування параметрів обміну
+# ===================================================================
+
+- wbs: WBS-2.3
+
+  tasks:
+
+    - id: T-2.3.1
+      name: Узгодити кореневу групу товарів і параметри надсилання залишків (вкладка "Zasoby")
+
+      description: >
+        Узгодити кореневу "Grupa towarów" для дерева товарів
+        e-Sklep, а також параметри "Wyślij zasoby" (чи надсилати
+        залишки) і "Stany na dzień" (передавати доступну
+        кількість з урахуванням резервувань чи повну кількість
+        на складі).
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.2.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджені коренева група товарів і параметри надсилання залишків
+
+      used_by:
+        - T-2.3.2
+
+      interview_checklist:
+        - Яка група товарів ERP Optima має бути коренем каталогу e-Sklep?
+        - Чи потрібно надсилати в e-Sklep залишки товарів (Wyślij zasoby)?
+        - Чи мають передавані залишки враховувати резервування ("Ilość dostępna"), чи має передаватися повна кількість на складі?
+
+      verification_checklist:
+        - Перевірити, що обрана група товарів існує і містить потрібну структуру підгруп.
+        - Перевірити, що рішення щодо надсилання залишків (Wyślij zasoby) узгоджено.
+        - Перевірити, що визначено спосіб розрахунку залишків (Stany na dzień).
+
+    - id: T-2.3.2
+      name: Узгодити склади-джерела залишків (вкладка "Zasoby")
+
+      description: >
+        Узгодити перелік складів ("Magazyny"), з яких залишки
+        будуть передаватися в e-Sklep, і визначити склад
+        за замовчуванням, на який будуть створюватися резервування.
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.3.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджені перелік складів і склад за замовчуванням
+
+      used_by:
+        - T-3.2.1
+
+      interview_checklist:
+        - Які склади ERP Optima мають брати участь у передачі залишків в e-Sklep?
+        - Який склад має бути визначений як склад за замовчуванням для створення резервувань?
+
+      verification_checklist:
+        - Перевірити, що перелік складів узгоджено із замовником.
+        - Перевірити, що визначено рівно один склад за замовчуванням.
+
+# ===================================================================
+# WBS-2.4 Підготовка до підключення e-Sklep
+# ===================================================================
+
+- wbs: WBS-2.4
+
+  tasks:
+
+    - id: T-2.4.1
+      name: Узгодити зіставлення способів оплати (вкладка "Dodatkowe")
+
+      description: >
+        Визначити відповідність форм оплати ERP Optima способам
+        оплати e-Sklep на вкладці "Standardowe" (Gotówka, On-line,
+        Przelew, Raty, Dodatkowa 1, Dodatkowa 2) і, за наявності
+        декількох платіжних провайдерів типу online, зіставлення
+        на вкладці "Online".
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.2.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджена таблиця зіставлення способів оплати
+
+      used_by:
+        - T-2.4.2
+
+      interview_checklist:
+        - Яка форма оплати ERP Optima відповідає "Gotówka" в e-Sklep?
+        - Яка форма оплати відповідає стандартній оплаті "On-line"?
+        - Яка форма оплати відповідає "Przelew"?
+        - Чи використовується оплата "Raty", і яка форма їй відповідає?
+        - Чи використовуються додаткові способи оплати (Dodatkowa 1, Dodatkowa 2)?
+        - Чи використовується декілька платіжних провайдерів типу online (наприклад, Dotpay, PayPal), що потребують окремого зіставлення на вкладці Online?
+
+      verification_checklist:
+        - Перевірити, що для кожного використовуваного в e-Sklep способу оплати визначено форму оплати ERP Optima.
+        - Перевірити, що зіставлення платіжних провайдерів online узгоджено, якщо воно потрібне.
+
+    - id: T-2.4.2
+      name: Узгодити параметри контрагентів і ліміту платежів B2B (вкладка "Dodatkowe")
+
+      description: >
+        Узгодити параметр "Mapuj kontrahentów" (зіставлення
+        контрагентів e-Sklep з картками ERP Optima за NIP та
+        e-mail), групу контрагентів для імпорту з e-Sklep
+        ("Grupa kontrahenta"), а також режим "Kontrola limitu
+        płatności" для клієнтів B2B (brak / ostrzeżenie / blokada).
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.4.1
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Узгоджені параметри зіставлення контрагентів і контролю ліміту платежів
+
+      used_by:
+        - T-2.4.3
+
+      interview_checklist:
+        - Чи потрібно зіставляти контрагентів e-Sklep з наявними картками ERP Optima за NIP та e-mail (Mapuj kontrahentów)?
+        - До якої групи контрагентів мають потрапляти контрагенти, імпортовані з e-Sklep?
+        - "Який режим контролю ліміту платежів має застосовуватися для клієнтів B2B: без дії, попередження чи блокування?"
+
+      verification_checklist:
+        - Перевірити, що рішення щодо параметра Mapuj kontrahentów узгоджено.
+        - Перевірити, що визначено групу контрагентів для імпорту.
+        - Перевірити, що режим контролю ліміту платежів узгоджено із замовником.
+
+    - id: T-2.4.3
+      name: Підтвердити готовність ERP Optima до створення підключення
+
+      description: >
+        Звести воєдино дані для генерації ключа обміну (T-2.1.2),
+        параметри вкладки Ogólne (T-2.2.1, T-2.2.2), параметри
+        вкладки Zasoby (T-2.3.1, T-2.3.2) і параметри вкладки
+        Dodatkowe (T-2.4.1, T-2.4.2), і підтвердити готовність до
+        їх внесення у форму Comarch e-Sklep в ERP Optima.
+
+      performer: Консультант
+
+      depends_on:
+        - T-2.1.2
+        - T-2.2.2
+        - T-2.3.2
+        - T-2.4.2
+
+      source:
+        type: Official Comarch Documentation
+        url: https://pomoc.comarch.pl/optima/pl/2026_5/dokumentacja/formularz-comarch-e-sklep/
+
+      result:
+        - Підтверджена готовність ERP Optima до підключення e-Sklep
+
+      used_by:
+        - T-3.1.1
+
+      interview_checklist: []
+
+      verification_checklist:
+        - Перевірити, що дані для генерації ключа обміну підтверджені.
+        - Перевірити, що параметри вкладки Ogólne узгоджені.
+        - Перевірити, що параметри вкладки Zasoby узгоджені.
+        - Перевірити, що параметри вкладки Dodatkowe узгоджені.
+        - Перевірити, що всі дані готові для внесення у форму Comarch e-Sklep в ERP Optima.

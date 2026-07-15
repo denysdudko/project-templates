@@ -20,6 +20,7 @@
 
 Запуск:
     python3 assemble_plan.py --input path/to/client-input.json --output plan.json
+    python3 assemble_plan.py --input path/to/client-input.json --lang ua
     python3 assemble_plan.py --selftest
 """
 
@@ -176,12 +177,16 @@ def validate_input(data: dict) -> dict:
     return data
 
 
-def load_template() -> tuple[dict, dict[str, dict]]:
-    schema = load_yaml(TEMPLATE_ROOT / "schema" / "milestones_wbs.yaml")
+LANG_CHOICES = ("ru", "ua")
+
+
+def load_template(lang: str = "ru") -> tuple[dict, dict[str, dict]]:
+    suffix = "" if lang == "ru" else f".{lang}"
+    schema = load_yaml(TEMPLATE_ROOT / "schema" / f"milestones_wbs{suffix}.yaml")
     tasks_by_milestone = {}
     for i in range(1, 10):
         mid = f"M{i}"
-        tasks_by_milestone[mid] = load_yaml(TEMPLATE_ROOT / "tasks" / f"{mid}_tasks.yaml")
+        tasks_by_milestone[mid] = load_yaml(TEMPLATE_ROOT / "tasks" / f"{mid}_tasks{suffix}.yaml")
     return schema, tasks_by_milestone
 
 
@@ -234,11 +239,32 @@ def lookup_integration_doc(name: str) -> str | None:
     return KNOWN_INTEGRATION_DOCS.get(name.strip().lower())
 
 
-def build_wbs_6_4_tasks(base_tasks: list[dict], integrations: list[str]) -> tuple[list[dict], list[str]]:
+# Task для WBS-6.4 генерируются динамически (по каждой integration из input),
+# а не читаются из tasks/M6_tasks{.lang}.yaml -- поэтому их текст не покрыт
+# переводом контента и локализуется здесь отдельно по lang (см. --lang в
+# CHANGELOG v3.6).
+INTEGRATION_TASK_TEXT: dict[str, dict[str, str]] = {
+    "ru": {
+        "name": "Настроить интеграцию {name} согласно документации Comarch",
+        "result": "Настроенная и активная интеграция {name}",
+        "verification": "Проверить, что интеграция {name} активна и работает согласно её документации.",
+    },
+    "ua": {
+        "name": "Налаштувати інтеграцію {name} згідно з документацією Comarch",
+        "result": "Налаштована та активна інтеграція {name}",
+        "verification": "Перевірити, що інтеграція {name} активна і працює згідно з її документацією.",
+    },
+}
+
+
+def build_wbs_6_4_tasks(
+    base_tasks: list[dict], integrations: list[str], lang: str = "ru"
+) -> tuple[list[dict], list[str]]:
     """selection-rules.md, раздел "Правило для WBS-6.4"."""
     if not integrations:
         return [dict(t) for t in base_tasks], []
 
+    texts = INTEGRATION_TASK_TEXT[lang]
     t_6_4_1 = next(dict(t) for t in base_tasks if t["id"] == "T-6.4.1")
     result = [t_6_4_1]
     unresolved: list[str] = []
@@ -250,16 +276,14 @@ def build_wbs_6_4_tasks(base_tasks: list[dict], integrations: list[str]) -> tupl
         result.append(
             {
                 "id": f"T-6.4.2.{idx}",
-                "name": f"Настроить интеграцию {name} согласно документации Comarch",
+                "name": texts["name"].format(name=name),
                 "performer": "Консультант",
                 "depends_on": ["T-6.4.1"],
                 "source": {"type": "Official Comarch Documentation", "url": doc_url},
-                "result": [f"Настроенная и активная интеграция {name}"],
+                "result": [texts["result"].format(name=name)],
                 "used_by": ["WBS-6.5"],
                 "interview_checklist": [],
-                "verification_checklist": [
-                    f"Проверить, что интеграция {name} активна и работает согласно её документации."
-                ],
+                "verification_checklist": [texts["verification"].format(name=name)],
                 "generated_from": "T-6.4.2",
             }
         )
@@ -267,7 +291,7 @@ def build_wbs_6_4_tasks(base_tasks: list[dict], integrations: list[str]) -> tupl
 
 
 def build_milestones(
-    template_schema: dict, tasks_by_milestone: dict[str, dict], integrations: list[str]
+    template_schema: dict, tasks_by_milestone: dict[str, dict], integrations: list[str], lang: str = "ru"
 ) -> tuple[list[dict], list[str]]:
     milestones = []
     unresolved_integrations: list[str] = []
@@ -280,7 +304,7 @@ def build_milestones(
             wbs_id = wbs_def["id"]
             tasks = tasks_by_wbs.get(wbs_id, [])
             if wbs_id == "WBS-6.4":
-                tasks, unresolved = build_wbs_6_4_tasks(tasks, integrations)
+                tasks, unresolved = build_wbs_6_4_tasks(tasks, integrations, lang=lang)
                 unresolved_integrations.extend(unresolved)
             else:
                 tasks = [dict(t) for t in tasks]
@@ -393,15 +417,24 @@ def effort_for_task(task_type_id: str, task_types_by_id: dict[str, dict]) -> dic
     }
 
 
-def build_effort_estimates(all_tasks: list[dict], effort_ref: dict) -> dict[str, dict]:
+def build_effort_estimates(
+    all_tasks: list[dict], effort_ref: dict, ru_name_by_id: dict[str, str] | None = None
+) -> dict[str, dict]:
+    """ru_name_by_id -- classify_task() сопоставляет keywords effort-estimates.yaml
+    (русские глаголы) с текстом Task.name; при lang != "ru" сам отображаемый
+    Task.name уже переведён и с этой эвристикой не совпадёт. Тип Task -- свойство
+    Task ID (методология), не текста на конкретном языке, поэтому классификация
+    всегда идёт по RU-названию, а часы применяются к Task выбранного языка (см.
+    assemble_plan(), CHANGELOG v3.6)."""
     task_types = effort_ref["task_types"]
     task_types_by_id = {t["id"]: t for t in task_types}
     estimates = {}
     for t in all_tasks:
-        type_id = classify_task(t, task_types)
+        classify_source = t if ru_name_by_id is None else {"id": t["id"], "name": ru_name_by_id.get(t["id"], t["name"])}
+        type_id = classify_task(classify_source, task_types)
         if type_id is None:
             raise ValueError(
-                f"{t['id']} ({t['name']!r}): keyword-эвристика effort-estimates.yaml "
+                f"{t['id']} ({classify_source['name']!r}): keyword-эвристика effort-estimates.yaml "
                 f"не дала совпадения и нет override в MANUAL_TASK_TYPE_OVERRIDES -- "
                 f"Task не может быть распределена без ручной классификации."
             )
@@ -650,19 +683,30 @@ def adapt_wording_with_llm(plan: dict, input_data: dict, llm_client=None) -> tup
 # ---------------------------------------------------------------------------
 
 
-def assemble_plan(input_data: dict, llm_client=None) -> dict:
+def assemble_plan(input_data: dict, llm_client=None, lang: str = "ru") -> dict:
+    if lang not in LANG_CHOICES:
+        raise ValueError(f"lang должен быть одним из {LANG_CHOICES}, получено {lang!r}")
     input_data = validate_input(input_data)
-    template_schema, tasks_by_milestone = load_template()
+    template_schema, tasks_by_milestone = load_template(lang=lang)
     effort_ref = load_yaml(AGENT_DIR / "effort-estimates.yaml")
     risk_register = load_yaml(AGENT_DIR / "risk-register.yaml")
 
     charter = build_charter(input_data, template_schema)
     milestones, unresolved_integrations = build_milestones(
-        template_schema, tasks_by_milestone, input_data.get("integrations", [])
+        template_schema, tasks_by_milestone, input_data.get("integrations", []), lang=lang
     )
     all_tasks = flatten_tasks(milestones)
     dependencies = build_dependencies(all_tasks)
-    effort = build_effort_estimates(all_tasks, effort_ref)
+
+    ru_name_by_id = None
+    if lang != "ru":
+        ru_schema, ru_tasks_by_milestone = load_template(lang="ru")
+        ru_milestones, _ = build_milestones(
+            ru_schema, ru_tasks_by_milestone, input_data.get("integrations", []), lang="ru"
+        )
+        ru_name_by_id = {t["id"]: t["name"] for t in flatten_tasks(ru_milestones)}
+
+    effort = build_effort_estimates(all_tasks, effort_ref, ru_name_by_id=ru_name_by_id)
     sprint_template = load_sprint_plan_template()
 
     sprint_result = build_sprint_plan(
@@ -696,6 +740,7 @@ def assemble_plan(input_data: dict, llm_client=None) -> dict:
             "template_id": template_schema["template"]["id"],
             "template_version": template_schema["template"]["version"],
             "unresolved_integrations": unresolved_integrations,
+            "lang": lang,
         },
     }
 
@@ -929,6 +974,55 @@ def run_selftest() -> None:
     else:
         failures.append("adapt_wording_with_llm не отклонил LLM-клиента, сломавшего структуру плана")
 
+    # --- --lang ua (CHANGELOG v3.6) ---------------------------------------
+    # 1) lang="ru" (по умолчанию) должен остаться байт-в-байт таким же, как
+    #    до появления --lang -- ru_name_by_id не должен подмешиваться, когда
+    #    lang == "ru".
+    # 2) lang="ua" не должен падать на build_effort_estimates (это и есть
+    #    находка, которая привела к этой правке -- keyword-эвристика
+    #    effort-estimates.yaml рассчитана на русские глаголы и не совпадёт
+    #    с украинским текстом Task.name без классификации по RU-названию).
+    # 3) ID Milestone/WBS/Task между lang="ru" и lang="ua" должны совпадать
+    #    1:1 (перевод -- контента, не структуры).
+    ua_input = dict(tight_input)
+    ua_input["integrations"] = ["Baselinker", "DHL"]
+    ru_plan_for_lang_check = assemble_plan(dict(ua_input), lang="ru")
+    ua_plan = assemble_plan(dict(ua_input), lang="ua")
+
+    assert ua_plan["meta"]["lang"] == "ua", ua_plan["meta"]
+    assert ru_plan_for_lang_check["meta"]["lang"] == "ru", ru_plan_for_lang_check["meta"]
+
+    def _all_ids(plan: dict) -> tuple[list[str], list[str], list[str]]:
+        m_ids = [m["id"] for m in plan["milestones"]]
+        wbs_ids = [wbs["id"] for m in plan["milestones"] for wbs in m["wbs"]]
+        t_ids = sorted(t["id"] for t in flatten_tasks(plan["milestones"]))
+        return m_ids, wbs_ids, t_ids
+
+    ru_m_ids, ru_wbs_ids, ru_t_ids = _all_ids(ru_plan_for_lang_check)
+    ua_m_ids, ua_wbs_ids, ua_t_ids = _all_ids(ua_plan)
+    assert ru_m_ids == ua_m_ids, (ru_m_ids, ua_m_ids)
+    assert ru_wbs_ids == ua_wbs_ids, (ru_wbs_ids, ua_wbs_ids)
+    assert ru_t_ids == ua_t_ids, set(ru_t_ids) ^ set(ua_t_ids)
+    print(f"[selftest] --lang ua: {len(ua_t_ids)} Task ID совпадают 1:1 с --lang ru (integrations: {ua_input['integrations']}) -- OK")
+
+    assert set(ua_plan["effort_estimates"]) == set(ua_t_ids), (
+        "--lang ua: build_effort_estimates должен покрыть все Task, включая динамически "
+        "сгенерированные WBS-6.4 (integrations), без ValueError по keyword-эвристике"
+    )
+    assert ua_plan["effort_estimates"] == ru_plan_for_lang_check["effort_estimates"], (
+        "--lang ua: классификация типа Task и часы -- методологическое свойство Task ID, "
+        "не текста -- должны совпадать с --lang ru при одинаковом input"
+    )
+    print("[selftest] --lang ua: effort_estimates (тип и часы) идентичны --lang ru для всех Task, включая WBS-6.4 -- OK")
+
+    ua_task_names = {t["id"]: t["name"] for t in flatten_tasks(ua_plan["milestones"])}
+    ru_task_names = {t["id"]: t["name"] for t in flatten_tasks(ru_plan_for_lang_check["milestones"])}
+    assert ua_task_names != ru_task_names, "--lang ua: тексты Task.name не должны совпадать с --lang ru (перевод не применился?)"
+    assert ua_task_names["T-6.4.2.1"] != ru_task_names["T-6.4.2.1"], (
+        "--lang ua: динамически сгенерированный Task для интеграции (WBS-6.4) должен быть локализован, не взят из RU"
+    )
+    print("[selftest] --lang ua: тексты Task.name (включая динамические WBS-6.4) отличаются от --lang ru -- OK")
+
     if failures or mismatches:
         sys.exit(1)
 
@@ -943,6 +1037,12 @@ def main() -> None:
     parser.add_argument("--input", type=Path, help="Путь к заполненному input-schema.json клиента")
     parser.add_argument("--output", type=Path, help="Куда записать итоговый план (по умолчанию -- stdout)")
     parser.add_argument("--format", choices=["json", "yaml"], default="json")
+    parser.add_argument(
+        "--lang",
+        choices=list(LANG_CHOICES),
+        default="ru",
+        help="Язык контента шаблона (Milestones/WBS/Task) -- ru (по умолчанию) или ua",
+    )
     parser.add_argument("--selftest", action="store_true", help="Прогнать самопроверку классификации без клиентского input")
     args = parser.parse_args()
 
@@ -954,7 +1054,7 @@ def main() -> None:
         parser.error("--input обязателен (или используйте --selftest)")
 
     input_data = load_json(args.input)
-    plan = assemble_plan(input_data)
+    plan = assemble_plan(input_data, lang=args.lang)
 
     if args.format == "json":
         text = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
