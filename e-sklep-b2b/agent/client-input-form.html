@@ -254,6 +254,12 @@
       <label class="req" for="client">Заказчик</label>
       <input type="text" id="client" placeholder="ABC sp. z o.o.">
 
+      <label class="req">Язык шаблона (Milestones/WBS/Task)</label>
+      <div class="checks">
+        <label class="check-row"><input type="radio" name="lang" value="ru" id="lang_ru" checked> Русский</label>
+        <label class="check-row"><input type="radio" name="lang" value="ua" id="lang_ua"> Українська</label>
+      </div>
+
       <label class="req" for="jira_project_key">Jira Project Key</label>
       <input type="text" id="jira_project_key" placeholder="напр. ESK">
       <p class="hint">Ключ уже существующего Jira-проекта. Email/токен для подключения сервер берёт из <code>agent/.env</code>, здесь не указываются.</p>
@@ -394,6 +400,7 @@ function buildJson() {
   const start_date = document.getElementById('start_date').value;
   const target_launch_date = document.getElementById('target_launch_date').value;
   const features = collectFeatures();
+  const lang = document.querySelector('input[name="lang"]:checked').value;
 
   const data = {
     project_name: project_name || undefined,
@@ -403,7 +410,8 @@ function buildJson() {
     integrations: integrations,
     features: features,
     start_date: start_date || undefined,
-    target_launch_date: target_launch_date || undefined
+    target_launch_date: target_launch_date || undefined,
+    lang: lang
   };
   if (erp_version) data.erp.version = erp_version;
 
